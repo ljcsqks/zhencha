@@ -46,6 +46,8 @@ def partition_search_area(grid_map: GridMap, region_count: int) -> list[set[Posi
     if not searchable:
         return []
 
+    # First implementation uses deterministic vertical stripes. Connected
+    # components are split afterward so obstacles cannot create disconnected tasks.
     stripe_width = max(1, grid_map.width_cells // region_count)
     stripes: list[set[Position]] = [set() for _ in range(region_count)]
     for cell in searchable:

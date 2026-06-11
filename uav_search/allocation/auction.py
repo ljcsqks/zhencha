@@ -19,6 +19,8 @@ class SequentialAuction:
         assignments: list[Assignment] = []
         available_by_id = {uav.id: uav for uav in available_uavs}
 
+        # Sequential single-item auction: each task is sold once, and each UAV
+        # can win at most one task in this scheduling cycle.
         for task in sorted(pending_tasks, key=lambda item: (-item.priority, item.created_at, item.id)):
             if not available_by_id:
                 break

@@ -41,6 +41,8 @@ def astar_search(
             return _reconstruct_path(came_from, current)
         closed.add(current)
 
+        # Neighbors come from GridMap so obstacle, no-fly, and diagonal corner
+        # rules stay centralized in the map layer.
         for neighbor in grid_map.get_neighbors(current, mode=8):
             tentative_g = g_score[current] + _move_cost(current, neighbor) + _environment_cost(
                 grid_map, neighbor, config
