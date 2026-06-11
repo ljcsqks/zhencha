@@ -38,3 +38,32 @@ def test_scheduler_handles_low_battery_event() -> None:
     assert "low_battery_001" in output.events_handled
     assert any(command.command == CommandType.RETURN_HOME for command in output.commands)
     assert fleet.get_uav("uav_01").state.status == UAVStatus.RETURNING
+
+
+def test_scheduler_replans_invalid_path_after_map_update() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    scheduler.regular_cycle(now=0.0)
+    state = fleet.get_uav("uav_01").state
+    blocked_pos = state.path[1]
+
+    scheduler.event_manager.emit(
+        Event(
+            id="map_update_001",
+            type=EventType.MAP_UPDATE,
+            timestamp=1.0,
+            priority=EventPriority.HIGH,
+            data={
+                "operation": "SET_CELL",
+                "position": {"x": blocked_pos.x, "y": blocked_pos.y},
+                "cell_type": "OBSTACLE",
+            },
+        )
+    )
+    output = scheduler.regular_cycle(now=1.0)
+
+    assert "map_update_001" in output.events_handled
+    assert any(command.command in (CommandType.REPLAN, CommandType.HOLD) for command in output.commands)
+    assert not grid_map.is_passable(blocked_pos)

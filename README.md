@@ -53,6 +53,14 @@ python -m uav_search.main --config config/default.yaml --scenario config/scenari
 
 该场景会生成多个搜索任务，通过顺序拍卖分配给 3 架 UAV，并输出覆盖率快照和静态效果图。
 
+## 当前动态响应能力
+
+调度器当前支持以下高优先级事件：
+
+- `LOW_BATTERY`：无人机切换为返航，并规划返回 home 的路径
+- `UAV_OFFLINE`：无人机标记为离线并停止执行路径
+- `MAP_UPDATE`：运行时更新地图，并对失效路径触发局部重规划
+
 ## 文档
 
 - `docs/superpowers/specs/2026-06-11-multi-uav-search-design.md`：总体设计方案

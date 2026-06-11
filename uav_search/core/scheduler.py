@@ -9,6 +9,7 @@ from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOut
 from uav_search.core.data_types import UAVState, UAVStatus
 from uav_search.core.event_manager import EventManager
 from uav_search.maps.grid_map import GridMap
+from uav_search.maps.map_updater import MapUpdater
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
 from uav_search.planning.path_planner import PathPlanner
 from uav_search.task.task_generator import generate_initial_tasks
@@ -24,6 +25,7 @@ class Scheduler:
         self.fleet = fleet
         self.config = config
         self.planner = PathPlanner(config.get("planning", {}))
+        self.map_updater = MapUpdater(grid_map)
         self.auction = SequentialAuction({**config, "battery_threshold": config["uav"]["battery_threshold"]})
         self.task_manager = TaskManager()
         self.event_manager = EventManager(config["scheduler"].get("event_debounce_s", 0.2))
@@ -113,6 +115,8 @@ class Scheduler:
             return self._handle_low_battery(event)
         if event.type == EventType.UAV_OFFLINE:
             return self._handle_uav_offline(event)
+        if event.type == EventType.MAP_UPDATE:
+            return self._handle_map_update(event)
         return []
 
     def handle_urgent_events(self, events: list[Event]) -> tuple[list[DecisionCommand], list[str]]:
@@ -207,3 +211,44 @@ class Scheduler:
                 reason="uav_offline",
             )
         ]
+
+    def _handle_map_update(self, event: Event) -> list[DecisionCommand]:
+        updates = event.data.get("updates", [])
+        if not updates and "operation" in event.data:
+            updates = [event.data]
+        self.map_updater.apply_updates(updates)
+
+        commands: list[DecisionCommand] = []
+        for state in self.fleet.get_all_states():
+            if state.status == UAVStatus.OFFLINE or not state.path:
+                continue
+            if self.planner.is_path_valid(state.path[state.path_index :], self.grid_map):
+                continue
+
+            # Replan only the affected UAV's current route, keeping task ownership stable.
+            goal = state.path[-1]
+            plan = self.planner.plan_path(state, goal, self.grid_map, task_id=state.current_task_id)
+            if not plan.valid:
+                commands.append(
+                    DecisionCommand(
+                        uav_id=state.id,
+                        command=CommandType.HOLD,
+                        task_id=state.current_task_id,
+                        target=goal,
+                        path=[],
+                        reason="map_update_replan_failed",
+                    )
+                )
+                continue
+            self.fleet.assign_path(state.id, plan.path, status=state.status)
+            commands.append(
+                DecisionCommand(
+                    uav_id=state.id,
+                    command=CommandType.REPLAN,
+                    task_id=state.current_task_id,
+                    target=goal,
+                    path=plan.path,
+                    reason="map_update",
+                )
+            )
+        return commands
