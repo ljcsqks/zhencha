@@ -17,7 +17,7 @@ class UAV:
         self.state.path = path
         self.state.path_index = 0
         self.state.status = status
-        self.state.available = status not in (UAVStatus.OFFLINE, UAVStatus.RETURNING)
+        self.state.available = status == UAVStatus.IDLE
 
     def move_along_path(self, time_step_s: float, resolution_m: float) -> float:
         if self.state.status == UAVStatus.OFFLINE or not self.state.path:

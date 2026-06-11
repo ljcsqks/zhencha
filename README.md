@@ -62,7 +62,7 @@ python -m uav_search.main --config config/default.yaml --scenario config/scenari
 - `MAP_UPDATE`：运行时更新地图，并对失效路径触发局部重规划
 - `TARGET_FOUND`：发现者切换为确认状态，并重规划至目标位置
 
-场景文件中的 `events` 会按 `time_s` 在仿真过程中自动注入。例如 `config/scenarios/dynamic_basic.yaml` 会在运行中注入一次 `MAP_UPDATE`。
+场景文件中的 `events` 会按 `time_s` 在仿真过程中自动注入。例如 `config/scenarios/dynamic_basic.yaml` 会在运行中注入 `TARGET_FOUND` 和 `MAP_UPDATE`。
 
 ## 文档
 

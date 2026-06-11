@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import Any
 
 from uav_search.allocation.auction import SequentialAuction
-from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOutput, Event, EventType, Position
+from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOutput, Event, EventPriority, EventType, Position
 from uav_search.core.data_types import UAVState, UAVStatus
 from uav_search.core.event_manager import EventManager
 from uav_search.maps.grid_map import GridMap
@@ -29,6 +29,7 @@ class Scheduler:
         self.auction = SequentialAuction({**config, "battery_threshold": config["uav"]["battery_threshold"]})
         self.task_manager = TaskManager()
         self.event_manager = EventManager(config["scheduler"].get("event_debounce_s", 0.2))
+        self._confirmations: dict[str, dict[str, Any]] = {}
         self._initialized = False
 
     def regular_cycle(self, now: float = 0.0) -> DecisionOutput:
@@ -119,12 +120,40 @@ class Scheduler:
             return self._handle_map_update(event)
         if event.type == EventType.TARGET_FOUND:
             return self._handle_target_found(event)
+        if event.type == EventType.CONFIRM_DONE:
+            return self._handle_confirm_done(event)
         return []
 
     def handle_urgent_events(self, events: list[Event]) -> tuple[list[DecisionCommand], list[str]]:
         commands: list[DecisionCommand] = []
         handled_ids: list[str] = []
         for event in events:
+            commands.extend(self.handle_event(event))
+            handled_ids.append(event.id)
+        return commands, handled_ids
+
+    def update_after_step(self, now: float) -> tuple[list[DecisionCommand], list[str]]:
+        """Advance runtime task state after UAV movement and sensor coverage updates."""
+        commands: list[DecisionCommand] = []
+        handled_ids: list[str] = []
+        for task_id, confirmation in list(self._confirmations.items()):
+            uav = self.fleet.get_uav(confirmation["uav_id"]).state
+            target = confirmation["target"]
+            if uav.status != UAVStatus.CONFIRMING or uav.position != target:
+                continue
+
+            confirmation["dwell_steps"] += 1
+            if confirmation["dwell_steps"] < int(self.config["search"]["confirm_duration_steps"]):
+                continue
+
+            event = Event(
+                id=f"confirm_done_{task_id}",
+                type=EventType.CONFIRM_DONE,
+                timestamp=now,
+                priority=EventPriority.NORMAL,
+                source_uav_id=uav.id,
+                data={"task_id": task_id, "target_id": confirmation["target_id"]},
+            )
             commands.extend(self.handle_event(event))
             handled_ids.append(event.id)
         return commands, handled_ids
@@ -265,10 +294,19 @@ class Scheduler:
 
         target = Position(int(target_pos_data["x"]), int(target_pos_data["y"]))
         uav = self.fleet.get_uav(event.source_uav_id).state
+        interrupted_task_id = uav.current_task_id
+        if interrupted_task_id in self.task_manager.tasks:
+            self.task_manager.requeue_task(interrupted_task_id, now=event.timestamp)
         uav.status = UAVStatus.CONFIRMING
         uav.available = False
         confirm_task_id = f"confirm_{target_data.get('target_id', event.id)}"
         uav.current_task_id = confirm_task_id
+        self._confirmations[confirm_task_id] = {
+            "uav_id": uav.id,
+            "target": target,
+            "target_id": target_data.get("target_id", event.id),
+            "dwell_steps": 0,
+        }
 
         plan = self.planner.plan_path(uav, target, self.grid_map, task_id=confirm_task_id)
         if not plan.valid:
@@ -292,5 +330,28 @@ class Scheduler:
                 target=target,
                 path=plan.path,
                 reason="target_found",
+            )
+        ]
+
+    def _handle_confirm_done(self, event: Event) -> list[DecisionCommand]:
+        task_id = event.data.get("task_id")
+        if task_id:
+            self._confirmations.pop(task_id, None)
+        if event.source_uav_id is None:
+            return []
+        uav = self.fleet.get_uav(event.source_uav_id).state
+        uav.status = UAVStatus.IDLE
+        uav.available = True
+        uav.current_task_id = None
+        uav.path = []
+        uav.path_index = 0
+        return [
+            DecisionCommand(
+                uav_id=uav.id,
+                command=CommandType.HOLD,
+                task_id=task_id,
+                target=uav.position,
+                path=[],
+                reason="confirm_done",
             )
         ]

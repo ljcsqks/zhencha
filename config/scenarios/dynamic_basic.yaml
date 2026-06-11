@@ -46,6 +46,15 @@ uavs:
     battery: 1.0
 
 events:
+  - time_s: 5
+    type: "TARGET_FOUND"
+    source_uav_id: "uav_02"
+    data:
+      target_id: "target_001"
+      position: {"x": 0, "y": 10}
+      confidence: 0.9
+      target_type: "person"
+
   - time_s: 30
     type: "MAP_UPDATE"
     data:

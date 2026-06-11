@@ -21,7 +21,7 @@ class Simulator:
         self.snapshots: list[dict[str, Any]] = []
         self._last_events: list[str] = []
 
-    def step(self) -> None:
+    def step(self, scheduler: Scheduler | None = None) -> None:
         time_step_s = float(self.config["simulation"]["time_step_s"])
         self.time_s += time_step_s
         self.fleet.step(time_step_s, self.grid_map.resolution_m)
@@ -29,6 +29,10 @@ class Simulator:
         for state in self.fleet.get_all_states():
             if state.status != UAVStatus.OFFLINE:
                 self.grid_map.mark_covered(state.position, state.sensor_radius_cells, self.time_s)
+
+        if scheduler is not None:
+            _, handled_ids = scheduler.update_after_step(self.time_s)
+            self._last_events.extend(handled_ids)
 
         self.record_snapshot()
 
@@ -41,12 +45,13 @@ class Simulator:
         steps = int(max_steps if max_steps is not None else self.config["simulation"]["max_steps"])
         for _ in range(steps):
             self._last_events = []
-            if scheduler is not None and event_injector is not None:
-                emitted = event_injector.emit_due(self.time_s, scheduler)
-                if emitted:
+            if scheduler is not None:
+                if event_injector is not None:
+                    event_injector.emit_due(self.time_s, scheduler)
+                if scheduler.event_manager.has_events():
                     decision = scheduler.regular_cycle(now=self.time_s)
                     self._last_events = decision.events_handled
-            self.step()
+            self.step(scheduler=scheduler)
             if all(state.status in (UAVStatus.IDLE, UAVStatus.OFFLINE) for state in self.fleet.get_all_states()):
                 break
 

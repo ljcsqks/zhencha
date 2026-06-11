@@ -58,11 +58,7 @@ class FleetManager:
         return [uav.state for uav in self._uavs.values()]
 
     def get_available_uavs(self) -> list[UAVState]:
-        return [
-            uav.state
-            for uav in self._uavs.values()
-            if uav.state.available and uav.state.status in (UAVStatus.IDLE, UAVStatus.SEARCHING)
-        ]
+        return [uav.state for uav in self._uavs.values() if uav.state.available and uav.state.status == UAVStatus.IDLE]
 
     def assign_path(self, uav_id: str, path: list[Position], status: UAVStatus = UAVStatus.SEARCHING) -> None:
         self.get_uav(uav_id).assign_path(path, status=status)
