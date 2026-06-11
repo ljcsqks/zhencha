@@ -59,6 +59,14 @@ python -m uav_search.main --config config/default.yaml --scenario config/scenari
 - `uav_trajectories.png`
 - `event_timeline.png`
 
+## 批量运行多个场景
+
+```powershell
+python -m uav_search.experiments.run_batch --scenarios basic multi_basic dynamic_basic --output-dir runs/batch_001
+```
+
+每个场景会输出独立的 `snapshots.json`、`metrics.json`、`final_view.png` 和报告图表，批量目录下还会生成 `summary.json` 与 `summary.csv`。
+
 ## 当前动态响应能力
 
 调度器当前支持以下高优先级事件：
