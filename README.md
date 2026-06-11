@@ -60,6 +60,7 @@ python -m uav_search.main --config config/default.yaml --scenario config/scenari
 - `LOW_BATTERY`：无人机切换为返航，并规划返回 home 的路径
 - `UAV_OFFLINE`：无人机标记为离线并停止执行路径
 - `MAP_UPDATE`：运行时更新地图，并对失效路径触发局部重规划
+- `TARGET_FOUND`：发现者切换为确认状态，并重规划至目标位置
 
 ## 文档
 

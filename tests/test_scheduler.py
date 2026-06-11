@@ -67,3 +67,31 @@ def test_scheduler_replans_invalid_path_after_map_update() -> None:
     assert "map_update_001" in output.events_handled
     assert any(command.command in (CommandType.REPLAN, CommandType.HOLD) for command in output.commands)
     assert not grid_map.is_passable(blocked_pos)
+
+
+def test_scheduler_handles_target_found_event() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id="uav_01",
+            data={
+                "target_id": "target_001",
+                "position": {"x": 5, "y": 5},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+    output = scheduler.regular_cycle(now=0.0)
+
+    assert "target_found_001" in output.events_handled
+    assert any(command.command == CommandType.CONFIRM_TARGET for command in output.commands)
+    assert fleet.get_uav("uav_01").state.status == UAVStatus.CONFIRMING

@@ -117,6 +117,8 @@ class Scheduler:
             return self._handle_uav_offline(event)
         if event.type == EventType.MAP_UPDATE:
             return self._handle_map_update(event)
+        if event.type == EventType.TARGET_FOUND:
+            return self._handle_target_found(event)
         return []
 
     def handle_urgent_events(self, events: list[Event]) -> tuple[list[DecisionCommand], list[str]]:
@@ -252,3 +254,43 @@ class Scheduler:
                 )
             )
         return commands
+
+    def _handle_target_found(self, event: Event) -> list[DecisionCommand]:
+        if event.source_uav_id is None:
+            return []
+        target_data = event.data
+        target_pos_data = target_data.get("position")
+        if target_pos_data is None:
+            return []
+
+        target = Position(int(target_pos_data["x"]), int(target_pos_data["y"]))
+        uav = self.fleet.get_uav(event.source_uav_id).state
+        uav.status = UAVStatus.CONFIRMING
+        uav.available = False
+        confirm_task_id = f"confirm_{target_data.get('target_id', event.id)}"
+        uav.current_task_id = confirm_task_id
+
+        plan = self.planner.plan_path(uav, target, self.grid_map, task_id=confirm_task_id)
+        if not plan.valid:
+            return [
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.HOLD,
+                    task_id=confirm_task_id,
+                    target=target,
+                    path=[],
+                    reason="target_confirm_path_not_found",
+                )
+            ]
+
+        self.fleet.assign_path(uav.id, plan.path, status=UAVStatus.CONFIRMING)
+        return [
+            DecisionCommand(
+                uav_id=uav.id,
+                command=CommandType.CONFIRM_TARGET,
+                task_id=confirm_task_id,
+                target=target,
+                path=plan.path,
+                reason="target_found",
+            )
+        ]
