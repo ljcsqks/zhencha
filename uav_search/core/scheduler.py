@@ -5,7 +5,9 @@ from dataclasses import replace
 from typing import Any
 
 from uav_search.allocation.auction import SequentialAuction
-from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOutput, Position, UAVState, UAVStatus
+from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOutput, Event, EventType, Position
+from uav_search.core.data_types import UAVState, UAVStatus
+from uav_search.core.event_manager import EventManager
 from uav_search.maps.grid_map import GridMap
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
 from uav_search.planning.path_planner import PathPlanner
@@ -24,15 +26,22 @@ class Scheduler:
         self.planner = PathPlanner(config.get("planning", {}))
         self.auction = SequentialAuction({**config, "battery_threshold": config["uav"]["battery_threshold"]})
         self.task_manager = TaskManager()
+        self.event_manager = EventManager(config["scheduler"].get("event_debounce_s", 0.2))
         self._initialized = False
 
     def regular_cycle(self, now: float = 0.0) -> DecisionOutput:
         """Run task generation, allocation, path planning, and conflict handling once."""
         started = time.perf_counter()
+        events_handled: list[str] = []
+        commands: list[DecisionCommand] = []
+
+        urgent_commands, urgent_event_ids = self.handle_urgent_events(self.event_manager.poll_events(now))
+        commands.extend(urgent_commands)
+        events_handled.extend(urgent_event_ids)
+
         self._ensure_initial_tasks(now)
 
         assignments = []
-        commands: list[DecisionCommand] = []
         proposed_assignments = self.auction.allocate(
             self.task_manager.get_pending_tasks(),
             self.fleet.get_available_uavs(),
@@ -93,11 +102,26 @@ class Scheduler:
             timestamp=now,
             commands=commands,
             assignments=assignments,
-            events_handled=[],
+            events_handled=events_handled,
             global_coverage=self.grid_map.coverage_rate(),
             priority_coverage=self.grid_map.coverage_rate(priority_only=True),
             decision_latency_ms=latency_ms,
         )
+
+    def handle_event(self, event: Event) -> list[DecisionCommand]:
+        if event.type == EventType.LOW_BATTERY:
+            return self._handle_low_battery(event)
+        if event.type == EventType.UAV_OFFLINE:
+            return self._handle_uav_offline(event)
+        return []
+
+    def handle_urgent_events(self, events: list[Event]) -> tuple[list[DecisionCommand], list[str]]:
+        commands: list[DecisionCommand] = []
+        handled_ids: list[str] = []
+        for event in events:
+            commands.extend(self.handle_event(event))
+            handled_ids.append(event.id)
+        return commands, handled_ids
 
     def _ensure_initial_tasks(self, now: float) -> None:
         if self._initialized:
@@ -134,3 +158,52 @@ class Scheduler:
             current = waypoint
 
         return route
+
+    def _handle_low_battery(self, event: Event) -> list[DecisionCommand]:
+        if event.source_uav_id is None:
+            return []
+        uav = self.fleet.get_uav(event.source_uav_id).state
+        uav.status = UAVStatus.RETURNING
+        uav.available = False
+        plan = self.planner.plan_path(uav, uav.home_position, self.grid_map, task_id=uav.current_task_id)
+        if not plan.valid:
+            return [
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.HOLD,
+                    task_id=uav.current_task_id,
+                    target=uav.home_position,
+                    path=[],
+                    reason="return_path_not_found",
+                )
+            ]
+
+        self.fleet.assign_path(uav.id, plan.path, status=UAVStatus.RETURNING)
+        return [
+            DecisionCommand(
+                uav_id=uav.id,
+                command=CommandType.RETURN_HOME,
+                task_id=uav.current_task_id,
+                target=uav.home_position,
+                path=plan.path,
+                reason="low_battery",
+            )
+        ]
+
+    def _handle_uav_offline(self, event: Event) -> list[DecisionCommand]:
+        if event.source_uav_id is None:
+            return []
+        uav = self.fleet.get_uav(event.source_uav_id).state
+        uav.status = UAVStatus.OFFLINE
+        uav.available = False
+        uav.path = []
+        return [
+            DecisionCommand(
+                uav_id=uav.id,
+                command=CommandType.HOLD,
+                task_id=uav.current_task_id,
+                target=None,
+                path=[],
+                reason="uav_offline",
+            )
+        ]
