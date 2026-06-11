@@ -11,6 +11,7 @@ from uav_search.maps.map_loader import build_grid_map
 from uav_search.simulation.scenario_events import ScenarioEventInjector
 from uav_search.simulation.simulator import Simulator
 from uav_search.uav.fleet_manager import FleetManager
+from uav_search.visualization.report_generator import generate_report_charts
 from uav_search.visualization.static_viewer import render_static_map
 
 
@@ -20,6 +21,7 @@ def run(
     output_path: Path,
     image_path: Path | None = None,
     metrics_path: Path | None = None,
+    report_dir: Path | None = None,
 ) -> DecisionOutput:
     config = load_config(default_config, scenario_path)
     validate_config(config)
@@ -45,6 +47,8 @@ def run(
             image_path,
             title=f"{scenario.get('name', 'UAV Search')} final state",
         )
+    if report_dir is not None:
+        generate_report_charts(simulator.snapshots, report_dir)
 
     return DecisionOutput(
         timestamp=simulator.time_s,
@@ -64,9 +68,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("runs/basic_snapshots.json"))
     parser.add_argument("--image", type=Path, default=None, help="Optional PNG path for a static visualization.")
     parser.add_argument("--metrics", type=Path, default=None, help="Optional JSON path for evaluation metrics.")
+    parser.add_argument("--report-dir", type=Path, default=None, help="Optional directory for report charts.")
     args = parser.parse_args()
 
-    output = run(args.config, args.scenario, args.output, args.image, args.metrics)
+    output = run(args.config, args.scenario, args.output, args.image, args.metrics, args.report_dir)
     print(
         f"finished timestamp={output.timestamp:.1f}s "
         f"coverage={output.global_coverage:.3f} "

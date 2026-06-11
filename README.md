@@ -40,7 +40,7 @@ pytest -q
 ## 运行基础仿真
 
 ```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/basic.yaml --output runs/basic_snapshots.json --image runs/basic_view.png --metrics runs/basic_metrics.json
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/basic.yaml --output runs/basic_snapshots.json --image runs/basic_view.png --metrics runs/basic_metrics.json --report-dir runs/basic_report
 ```
 
 运行完成后会输出仿真时间、覆盖率、重点区域覆盖率和首条路径规划耗时，并在 `runs/basic_snapshots.json` 写入快照，在 `runs/basic_view.png` 输出静态效果图，在 `runs/basic_metrics.json` 输出基础评估指标。
@@ -48,10 +48,16 @@ python -m uav_search.main --config config/default.yaml --scenario config/scenari
 ## 运行多 UAV 基础场景
 
 ```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/multi_basic.yaml --output runs/multi_basic_snapshots.json --image runs/multi_basic_view.png --metrics runs/multi_basic_metrics.json
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/multi_basic.yaml --output runs/multi_basic_snapshots.json --image runs/multi_basic_view.png --metrics runs/multi_basic_metrics.json --report-dir runs/multi_basic_report
 ```
 
 该场景会生成多个搜索任务，通过顺序拍卖分配给 3 架 UAV，并输出覆盖率快照和静态效果图。
+
+`--report-dir` 会额外输出：
+
+- `coverage_curve.png`
+- `uav_trajectories.png`
+- `event_timeline.png`
 
 ## 当前动态响应能力
 
