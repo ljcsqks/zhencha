@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from uav_search.core.data_types import UAVStatus
+from uav_search.core.scheduler import Scheduler
 from uav_search.maps.grid_map import GridMap
+from uav_search.simulation.scenario_events import ScenarioEventInjector
 from uav_search.uav.fleet_manager import FleetManager
 
 
@@ -17,6 +19,7 @@ class Simulator:
         self.config = config
         self.time_s = 0.0
         self.snapshots: list[dict[str, Any]] = []
+        self._last_events: list[str] = []
 
     def step(self) -> None:
         time_step_s = float(self.config["simulation"]["time_step_s"])
@@ -29,9 +32,20 @@ class Simulator:
 
         self.record_snapshot()
 
-    def run(self, max_steps: int | None = None) -> None:
+    def run(
+        self,
+        max_steps: int | None = None,
+        scheduler: Scheduler | None = None,
+        event_injector: ScenarioEventInjector | None = None,
+    ) -> None:
         steps = int(max_steps if max_steps is not None else self.config["simulation"]["max_steps"])
         for _ in range(steps):
+            self._last_events = []
+            if scheduler is not None and event_injector is not None:
+                emitted = event_injector.emit_due(self.time_s, scheduler)
+                if emitted:
+                    decision = scheduler.regular_cycle(now=self.time_s)
+                    self._last_events = decision.events_handled
             self.step()
             if all(state.status in (UAVStatus.IDLE, UAVStatus.OFFLINE) for state in self.fleet.get_all_states()):
                 break
@@ -52,7 +66,7 @@ class Simulator:
                     }
                     for state in self.fleet.get_all_states()
                 ],
-                "events": [],
+                "events": self._last_events,
             }
         )
 

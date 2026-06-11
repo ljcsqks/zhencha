@@ -7,6 +7,7 @@ from uav_search.core.config import load_config, validate_config
 from uav_search.core.data_types import DecisionOutput
 from uav_search.core.scheduler import Scheduler
 from uav_search.maps.map_loader import build_grid_map
+from uav_search.simulation.scenario_events import ScenarioEventInjector
 from uav_search.simulation.simulator import Simulator
 from uav_search.uav.fleet_manager import FleetManager
 from uav_search.visualization.static_viewer import render_static_map
@@ -24,7 +25,8 @@ def run(default_config: Path, scenario_path: Path, output_path: Path, image_path
 
     simulator = Simulator(grid_map, fleet, config)
     simulator.record_snapshot()
-    simulator.run()
+    event_injector = ScenarioEventInjector(scenario.get("events", []))
+    simulator.run(scheduler=scheduler, event_injector=event_injector)
     simulator.save_snapshots(output_path, run_id=scenario.get("name", "manual_run"))
     if image_path is not None:
         render_static_map(
