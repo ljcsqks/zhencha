@@ -6,6 +6,7 @@ from pathlib import Path
 from uav_search.core.config import load_config, validate_config
 from uav_search.core.data_types import DecisionOutput
 from uav_search.core.scheduler import Scheduler
+from uav_search.evaluation.metrics import compute_metrics, save_metrics
 from uav_search.maps.map_loader import build_grid_map
 from uav_search.simulation.scenario_events import ScenarioEventInjector
 from uav_search.simulation.simulator import Simulator
@@ -13,7 +14,13 @@ from uav_search.uav.fleet_manager import FleetManager
 from uav_search.visualization.static_viewer import render_static_map
 
 
-def run(default_config: Path, scenario_path: Path, output_path: Path, image_path: Path | None = None) -> DecisionOutput:
+def run(
+    default_config: Path,
+    scenario_path: Path,
+    output_path: Path,
+    image_path: Path | None = None,
+    metrics_path: Path | None = None,
+) -> DecisionOutput:
     config = load_config(default_config, scenario_path)
     validate_config(config)
     scenario = config.get("scenario", {})
@@ -28,6 +35,9 @@ def run(default_config: Path, scenario_path: Path, output_path: Path, image_path
     event_injector = ScenarioEventInjector(scenario.get("events", []))
     simulator.run(scheduler=scheduler, event_injector=event_injector)
     simulator.save_snapshots(output_path, run_id=scenario.get("name", "manual_run"))
+    if metrics_path is not None:
+        metrics = compute_metrics(scenario.get("name", "manual_run"), grid_map, fleet, simulator.snapshots)
+        save_metrics(metrics, metrics_path)
     if image_path is not None:
         render_static_map(
             grid_map,
@@ -53,9 +63,10 @@ def main() -> None:
     parser.add_argument("--scenario", type=Path, default=Path("config/scenarios/basic.yaml"))
     parser.add_argument("--output", type=Path, default=Path("runs/basic_snapshots.json"))
     parser.add_argument("--image", type=Path, default=None, help="Optional PNG path for a static visualization.")
+    parser.add_argument("--metrics", type=Path, default=None, help="Optional JSON path for evaluation metrics.")
     args = parser.parse_args()
 
-    output = run(args.config, args.scenario, args.output, args.image)
+    output = run(args.config, args.scenario, args.output, args.image, args.metrics)
     print(
         f"finished timestamp={output.timestamp:.1f}s "
         f"coverage={output.global_coverage:.3f} "

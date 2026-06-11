@@ -50,7 +50,7 @@ class ScenarioEventInjector:
         priority_value = item.get("priority")
         priority = EventPriority[priority_value] if priority_value else DEFAULT_PRIORITY.get(event_type, EventPriority.NORMAL)
         event = Event(
-            id=str(item.get("id", f"scenario_event_{index:03d}")),
+            id=str(item.get("id", f"scenario_{event_type.value.lower()}_{index:03d}")),
             type=event_type,
             timestamp=timestamp,
             priority=priority,
