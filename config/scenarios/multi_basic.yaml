@@ -1,0 +1,48 @@
+name: "multi_uav_basic"
+description: "多架无人机基础拍卖分配场景。"
+
+overrides:
+  map:
+    width_m: 300
+    height_m: 200
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 100
+
+map_features:
+  obstacles:
+    - id: "building_001"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 120
+      y_m: 40
+      width_m: 40
+      height_m: 120
+
+  no_fly_zones: []
+
+  priority_zones:
+    - id: "incident_area"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 230
+      y_m: 120
+      width_m: 50
+      height_m: 50
+      priority: 3.0
+
+uavs:
+  - id: "uav_01"
+    home_position: [0, 0]
+    initial_position: [0, 0]
+    battery: 1.0
+  - id: "uav_02"
+    home_position: [0, 10]
+    initial_position: [0, 10]
+    battery: 1.0
+  - id: "uav_03"
+    home_position: [0, 19]
+    initial_position: [0, 19]
+    battery: 1.0

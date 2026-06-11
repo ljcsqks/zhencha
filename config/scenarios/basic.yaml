@@ -1,0 +1,41 @@
+name: "basic_single_uav"
+description: "首轮闭环场景：单架无人机绕开建筑物到达目标点。"
+
+overrides:
+  map:
+    width_m: 200
+    height_m: 200
+    resolution_m: 10
+  simulation:
+    max_steps: 80
+
+map_features:
+  obstacles:
+    - id: "building_001"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 70
+      y_m: 40
+      width_m: 40
+      height_m: 100
+
+  no_fly_zones: []
+
+  priority_zones:
+    - id: "incident_area"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 140
+      y_m: 140
+      width_m: 40
+      height_m: 40
+      priority: 3.0
+
+uavs:
+  - id: "uav_01"
+    home_position: [0, 0]
+    initial_position: [0, 0]
+    battery: 1.0
+
+mission:
+  target: [18, 18]
