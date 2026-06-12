@@ -4,10 +4,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 
 

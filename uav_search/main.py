@@ -22,6 +22,9 @@ def run(
     image_path: Path | None = None,
     metrics_path: Path | None = None,
     report_dir: Path | None = None,
+    play: bool = False,
+    play_interval_ms: int = 160,
+    play_repeat: bool = False,
 ) -> DecisionOutput:
     config = load_config(default_config, scenario_path)
     validate_config(config)
@@ -49,6 +52,16 @@ def run(
         )
     if report_dir is not None:
         generate_report_charts(simulator.snapshots, report_dir)
+    if play:
+        from uav_search.visualization.realtime_viewer import play_snapshots
+
+        play_snapshots(
+            grid_map,
+            simulator.snapshots,
+            sensor_radius_cells=int(config["uav"]["sensor_radius_cells"]),
+            interval_ms=play_interval_ms,
+            repeat=play_repeat,
+        )
 
     return DecisionOutput(
         timestamp=simulator.time_s,
@@ -69,9 +82,22 @@ def main() -> None:
     parser.add_argument("--image", type=Path, default=None, help="Optional PNG path for a static visualization.")
     parser.add_argument("--metrics", type=Path, default=None, help="Optional JSON path for evaluation metrics.")
     parser.add_argument("--report-dir", type=Path, default=None, help="Optional directory for report charts.")
+    parser.add_argument("--play", action="store_true", help="Open a realtime matplotlib playback window after running.")
+    parser.add_argument("--play-interval-ms", type=int, default=160, help="Playback frame interval in milliseconds.")
+    parser.add_argument("--play-repeat", action="store_true", help="Loop playback until the window is closed.")
     args = parser.parse_args()
 
-    output = run(args.config, args.scenario, args.output, args.image, args.metrics, args.report_dir)
+    output = run(
+        args.config,
+        args.scenario,
+        args.output,
+        args.image,
+        args.metrics,
+        args.report_dir,
+        args.play,
+        args.play_interval_ms,
+        args.play_repeat,
+    )
     print(
         f"finished timestamp={output.timestamp:.1f}s "
         f"coverage={output.global_coverage:.3f} "

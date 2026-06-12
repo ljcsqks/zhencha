@@ -67,6 +67,14 @@ python -m uav_search.experiments.run_batch --scenarios basic multi_basic dynamic
 
 每个场景会输出独立的 `snapshots.json`、`metrics.json`、`final_view.png` 和报告图表，批量目录下还会生成 `summary.json` 与 `summary.csv`。
 
+## 实时播放仿真过程
+
+```powershell
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/dynamic_basic.yaml --output runs/dynamic_basic_snapshots.json --play --play-interval-ms 120
+```
+
+`--play` 会在仿真结束后打开 matplotlib 窗口，回放 UAV 移动、覆盖区域累计变化和事件触发。需要本机 Python/matplotlib 支持 GUI 后端；如果只想保存结果图，继续使用 `--image` 和 `--report-dir`。
+
 ## 当前动态响应能力
 
 调度器当前支持以下高优先级事件：
