@@ -46,17 +46,10 @@ def partition_search_area(grid_map: GridMap, region_count: int) -> list[set[Posi
     if not searchable:
         return []
 
-    # First implementation uses deterministic vertical stripes. Connected
-    # components are split afterward so obstacles cannot create disconnected tasks.
-    stripe_width = max(1, grid_map.width_cells // region_count)
-    stripes: list[set[Position]] = [set() for _ in range(region_count)]
-    for cell in searchable:
-        stripe_index = min(cell.x // stripe_width, region_count - 1)
-        stripes[stripe_index].add(cell)
-
+    components = _connected_components(set(searchable), grid_map)
     regions: list[set[Position]] = []
-    for stripe in stripes:
-        regions.extend(_connected_components(stripe, grid_map))
+    for component, split_count in zip(components, _component_split_counts(components, region_count)):
+        regions.extend(_split_component_balanced(component, split_count, grid_map))
     return regions
 
 
@@ -102,4 +95,96 @@ def _connected_components(cells: set[Position], grid_map: GridMap) -> list[set[P
                 component.add(neighbor)
                 queue.append(neighbor)
         components.append(component)
-    return components
+    return sorted(components, key=lambda component: (-len(component), min(component)))
+
+
+def _component_split_counts(components: list[set[Position]], desired_count: int) -> list[int]:
+    if not components:
+        return []
+    if desired_count <= len(components):
+        return [1 for _ in components]
+
+    counts = [1 for _ in components]
+    remaining = desired_count - len(components)
+    total_size = sum(len(component) for component in components)
+    fractional: list[tuple[float, int]] = []
+    for index, component in enumerate(components):
+        raw_extra = remaining * (len(component) / total_size)
+        extra = int(raw_extra)
+        counts[index] += extra
+        fractional.append((raw_extra - extra, index))
+
+    assigned_extra = sum(counts) - len(components)
+    for _, index in sorted(fractional, reverse=True):
+        if assigned_extra >= remaining:
+            break
+        counts[index] += 1
+        assigned_extra += 1
+    return counts
+
+
+def _split_component_balanced(component: set[Position], split_count: int, grid_map: GridMap) -> list[set[Position]]:
+    if split_count <= 1 or len(component) <= 1:
+        return [component]
+
+    seeds = _choose_seeds(component, min(split_count, len(component)))
+    regions = [{seed} for seed in seeds]
+    remaining = set(component) - set(seeds)
+    queues = [deque([seed]) for seed in seeds]
+    target_size = max(1, len(component) // len(seeds))
+
+    # Multi-source BFS keeps each grown region connected; the soft target size
+    # prevents early seeds from swallowing most of a large component.
+    while remaining and any(queues):
+        progressed = False
+        for index, queue in enumerate(queues):
+            if not queue:
+                continue
+            if len(regions[index]) >= target_size and any(len(region) < target_size for region in regions):
+                continue
+            current = queue.popleft()
+            for neighbor in grid_map.get_neighbors(current, mode=4):
+                if neighbor not in remaining:
+                    continue
+                remaining.remove(neighbor)
+                regions[index].add(neighbor)
+                queue.append(neighbor)
+                progressed = True
+                break
+        if not progressed:
+            if any(queues):
+                target_size = len(component)
+                continue
+            break
+
+    while remaining:
+        cell = min(remaining)
+        owner = _nearest_region_index(cell, regions)
+        remaining.remove(cell)
+        regions[owner].add(cell)
+
+    return [region for region in regions if region]
+
+
+def _choose_seeds(component: set[Position], seed_count: int) -> list[Position]:
+    seeds = [min(component)]
+    while len(seeds) < seed_count:
+        candidates = sorted(cell for cell in component if cell not in seeds)
+        next_seed = max(candidates, key=lambda cell: min(_manhattan(cell, seed) for seed in seeds))
+        seeds.append(next_seed)
+    return seeds
+
+
+def _nearest_region_index(cell: Position, regions: list[set[Position]]) -> int:
+    return min(
+        range(len(regions)),
+        key=lambda index: (
+            min(_manhattan(cell, existing) for existing in regions[index]),
+            len(regions[index]),
+            index,
+        ),
+    )
+
+
+def _manhattan(a: Position, b: Position) -> int:
+    return abs(a.x - b.x) + abs(a.y - b.y)
