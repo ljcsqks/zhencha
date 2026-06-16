@@ -28,6 +28,14 @@ class MetricsResult:
     confirm_done_count: int
     time_to_95_coverage_s: float | None
     time_to_priority_coverage_s: float | None
+    coverage_goal_met: bool
+    priority_goal_met: bool
+    supplemental_task_count: int
+    ignored_uncovered_cells: int
+    final_uncovered_cells: int
+    final_priority_uncovered_cells: int
+    post_95_extra_time_s: float | None
+    post_95_extra_distance_m: float | None
 
 
 def compute_metrics(
@@ -42,10 +50,22 @@ def compute_metrics(
     effective_distance_m = sum(state.effective_search_distance_m for state in states)
     path_efficiency = effective_distance_m / total_distance_m if total_distance_m > 0 else 0.0
     event_ids = [event_id for snapshot in snapshots for event_id in snapshot.get("events", [])]
+    time_to_95 = _first_time_reaching(snapshots, "global_coverage", 0.95)
+    final_time_s = float(snapshots[-1]["time_s"]) if snapshots else 0.0
+    final_uncovered_cells = len(grid_map.get_unsearched_cells(threshold=0.95))
+    final_priority_uncovered_cells = _count_final_priority_uncovered(grid_map)
+    supplemental_task_count = len(
+        {
+            uav.get("task_id")
+            for snapshot in snapshots
+            for uav in snapshot.get("uavs", [])
+            if str(uav.get("task_id", "")).startswith("supplemental_")
+        }
+    )
 
     return MetricsResult(
         run_id=run_id,
-        final_time_s=float(snapshots[-1]["time_s"]) if snapshots else 0.0,
+        final_time_s=final_time_s,
         global_coverage=grid_map.coverage_rate(),
         priority_coverage=grid_map.coverage_rate(priority_only=True),
         redundant_coverage_rate=grid_map.redundant_coverage_rate(),
@@ -59,8 +79,16 @@ def compute_metrics(
         map_update_count=_count_events(event_ids, "scenario_map_update"),
         target_found_count=_count_events(event_ids, "scenario_target_found"),
         confirm_done_count=sum(1 for event_id in event_ids if event_id.startswith("confirm_done_")),
-        time_to_95_coverage_s=_first_time_reaching(snapshots, "global_coverage", 0.95),
+        time_to_95_coverage_s=time_to_95,
         time_to_priority_coverage_s=_first_time_reaching(snapshots, "priority_coverage", 0.95),
+        coverage_goal_met=grid_map.coverage_rate() >= 0.92,
+        priority_goal_met=grid_map.coverage_rate(priority_only=True) >= 0.98 or not grid_map.get_priority_cells(),
+        supplemental_task_count=supplemental_task_count,
+        ignored_uncovered_cells=final_uncovered_cells if grid_map.coverage_rate() >= 0.92 else 0,
+        final_uncovered_cells=final_uncovered_cells,
+        final_priority_uncovered_cells=final_priority_uncovered_cells,
+        post_95_extra_time_s=None if time_to_95 is None else max(0.0, final_time_s - time_to_95),
+        post_95_extra_distance_m=_post_threshold_distance(snapshots, time_to_95),
     )
 
 
@@ -93,3 +121,26 @@ def _count_no_fly_violations(grid_map: GridMap, snapshots: list[dict[str, Any]])
             if grid_map.in_bounds(pos) and grid_map.get_cell(pos).cell_type == CellType.NO_FLY:
                 violations += 1
     return violations
+
+
+def _count_final_priority_uncovered(grid_map: GridMap) -> int:
+    return sum(
+        1
+        for cell in grid_map.get_priority_cells()
+        if grid_map.get_cell(cell).search_confidence < 0.95
+    )
+
+
+def _post_threshold_distance(snapshots: list[dict[str, Any]], threshold_time_s: float | None) -> float | None:
+    if threshold_time_s is None or not snapshots:
+        return None
+    threshold_snapshot = next((snapshot for snapshot in snapshots if float(snapshot["time_s"]) >= threshold_time_s), None)
+    if threshold_snapshot is None:
+        return None
+    final_distance = _snapshot_total_distance(snapshots[-1])
+    threshold_distance = _snapshot_total_distance(threshold_snapshot)
+    return max(0.0, final_distance - threshold_distance)
+
+
+def _snapshot_total_distance(snapshot: dict[str, Any]) -> float:
+    return sum(float(uav.get("total_distance_m", 0.0)) for uav in snapshot.get("uavs", []))

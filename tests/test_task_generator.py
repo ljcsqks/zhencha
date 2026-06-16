@@ -1,6 +1,12 @@
 from uav_search.core.data_types import CellType, Position
 from uav_search.maps.grid_map import GridMap
-from uav_search.task.task_generator import generate_boustrophedon_path, generate_initial_tasks, partition_search_area
+from uav_search.task.task_generator import (
+    estimate_task_cost,
+    generate_boustrophedon_path,
+    generate_initial_tasks,
+    partition_search_area,
+    reorder_waypoints_for_uav,
+)
 
 
 def test_partition_search_area_returns_connected_regions() -> None:
@@ -52,6 +58,26 @@ def test_generate_initial_tasks_creates_search_tasks() -> None:
     assert len(tasks) == 2
     assert all(task.waypoints for task in tasks)
     assert all(task.entry_point in task.waypoints for task in tasks)
+    assert all(task.estimated_cost_m > 0 for task in tasks)
+    assert all(task.uncovered_value == len(task.target_cells) for task in tasks)
+    assert all(task.score > 0 for task in tasks)
+
+
+def test_reorder_waypoints_starts_near_current_uav() -> None:
+    waypoints = [Position(0, 0), Position(1, 0), Position(9, 0), Position(9, 1)]
+
+    reordered = reorder_waypoints_for_uav(waypoints, Position(9, 1))
+
+    assert reordered[0] == Position(9, 1)
+    assert set(reordered) == set(waypoints)
+
+
+def test_estimate_task_cost_includes_entry_to_route_distance() -> None:
+    waypoints = [Position(1, 0), Position(3, 0)]
+
+    cost = estimate_task_cost(waypoints, entry_point=Position(0, 0), resolution_m=10)
+
+    assert cost == 30.0
 
 
 def _is_connected(region: set[Position], grid_map: GridMap) -> bool:

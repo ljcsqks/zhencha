@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 
@@ -24,9 +25,25 @@ from uav_search.maps.grid_map import GridMap
 from uav_search.maps.map_updater import MapUpdater
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
 from uav_search.planning.path_planner import PathPlanner
+from uav_search.task.task_generator import estimate_task_cost
 from uav_search.task.task_generator import generate_boustrophedon_path, generate_initial_tasks, nearest_cell
+from uav_search.task.task_generator import reorder_waypoints_for_uav
 from uav_search.task.task_manager import TaskManager
 from uav_search.uav.fleet_manager import FleetManager
+
+
+@dataclass
+class SupplementalCandidate:
+    cells: set[Position]
+    uncovered_cells: int
+    priority_uncovered_cells: int
+    uncovered_value: float
+    priority_value: float
+    nearest_uav_distance: float
+    estimated_cost_m: float
+    score: float
+    entry_point: Position
+    waypoints: list[Position]
 
 
 class Scheduler:
@@ -127,6 +144,8 @@ class Scheduler:
             uav_state = self.fleet.get_uav(proposed.uav_id).state
 
             # 规划经过所有航路点的路径
+            task.waypoints = reorder_waypoints_for_uav(task.waypoints, uav_state.position)
+            task.entry_point = task.waypoints[0]
             route = self._plan_route_through_waypoints(uav_state, task.waypoints)
             if not route:
                 # 路径规划失败，标记任务为阻塞状态
@@ -344,28 +363,25 @@ class Scheduler:
         if not candidates:
             return
 
-        max_cells = max(1, int(self.config["search"].get("supplemental_task_max_cells", 80)))
         tasks: list[Task] = []
-        for uav in sorted(available_uavs, key=lambda state: state.id):
-            if not candidates:
+        for candidate in candidates:
+            if len(tasks) >= len(available_uavs):
                 break
-            seed = min(candidates, key=lambda cell: abs(cell.x - uav.position.x) + abs(cell.y - uav.position.y))
-            region = self._collect_supplemental_region(seed, candidates, max_cells)
-            candidates.difference_update(region)
-            waypoints = generate_boustrophedon_path(region, int(self.config["uav"]["sensor_radius_cells"]))
-            if not waypoints:
-                continue
             self._supplemental_task_seq += 1
             tasks.append(
                 Task(
                     id=f"supplemental_{self._supplemental_task_seq:03d}",
                     type=TaskType.SEARCH,
-                    priority=max(self.grid_map.get_cell(cell).search_priority for cell in region),
-                    target_cells=set(region),
-                    entry_point=nearest_cell(waypoints, uav.position),
-                    waypoints=waypoints,
+                    priority=max(self.grid_map.get_cell(cell).search_priority for cell in candidate.cells),
+                    target_cells=set(candidate.cells),
+                    entry_point=candidate.entry_point,
+                    waypoints=candidate.waypoints,
+                    estimated_cost_m=candidate.estimated_cost_m,
                     created_at=now,
                     updated_at=now,
+                    uncovered_value=candidate.uncovered_value,
+                    priority_value=candidate.priority_value,
+                    score=candidate.score,
                 )
             )
         self.task_manager.add_tasks(tasks)
@@ -373,10 +389,13 @@ class Scheduler:
     def _collect_supplemental_region(self, seed: Position, candidates: set[Position], max_cells: int) -> set[Position]:
         region = {seed}
         queue = [seed]
+        max_radius = max(1, int(self.config["search"].get("supplemental_cluster_radius_cells", 4)))
         while queue and len(region) < max_cells:
             current = queue.pop(0)
             for neighbor in self.grid_map.get_neighbors(current, mode=4):
                 if neighbor not in candidates or neighbor in region:
+                    continue
+                if abs(neighbor.x - seed.x) + abs(neighbor.y - seed.y) > max_radius:
                     continue
                 region.add(neighbor)
                 queue.append(neighbor)
@@ -388,8 +407,109 @@ class Scheduler:
         threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         return self.grid_map.get_unsearched_cells(threshold=threshold)
 
-    def _get_supplemental_candidates(self) -> set[Position]:
-        return set(self._get_unsearched_cells()) - self._get_reserved_search_cells()
+    def _get_supplemental_candidates(self) -> list[SupplementalCandidate]:
+        available_uavs = self.fleet.get_available_uavs()
+        if not available_uavs:
+            return []
+
+        raw_candidates = set(self._get_unsearched_cells()) - self._get_reserved_search_cells()
+        if not raw_candidates:
+            return []
+
+        max_cells = max(
+            1,
+            int(
+                self.config["search"].get(
+                    "supplemental_cluster_max_cells",
+                    self.config["search"].get("supplemental_task_max_cells", 80),
+                )
+            ),
+        )
+        candidates: list[SupplementalCandidate] = []
+        remaining = set(raw_candidates)
+        while remaining:
+            seed = min(remaining)
+            region = self._collect_supplemental_region(seed, remaining, max_cells)
+            remaining.difference_update(region)
+            candidate = self._build_supplemental_candidate(region, available_uavs)
+            if candidate is not None and self._is_valuable_supplemental_candidate(candidate):
+                candidates.append(candidate)
+
+        return sorted(
+            candidates,
+            key=lambda item: (-item.score, -item.priority_value, item.nearest_uav_distance, -len(item.cells)),
+        )
+
+    def _build_supplemental_candidate(
+        self,
+        region: set[Position],
+        available_uavs: list[UAVState],
+    ) -> SupplementalCandidate | None:
+        if not region:
+            return None
+        raw_waypoints = generate_boustrophedon_path(region, int(self.config["uav"]["sensor_radius_cells"]))
+        if not raw_waypoints:
+            return None
+
+        nearest_uav = min(
+            available_uavs,
+            key=lambda state: min(abs(cell.x - state.position.x) + abs(cell.y - state.position.y) for cell in region),
+        )
+        waypoints = reorder_waypoints_for_uav(raw_waypoints, nearest_uav.position)
+        entry_point = waypoints[0]
+        nearest_distance = (abs(entry_point.x - nearest_uav.position.x) + abs(entry_point.y - nearest_uav.position.y)) * self.grid_map.resolution_m
+        internal_cost = estimate_task_cost(waypoints, entry_point, self.grid_map.resolution_m)
+        estimated_cost_m = nearest_distance + internal_cost
+        uncovered_value, priority_value = self._weighted_region_value(region)
+        value = uncovered_value + priority_value
+        cost = float(self.config["search"].get("distance_cost_weight", 1.0)) * max(estimated_cost_m, 1.0)
+        score = value / cost
+        priority_uncovered_cells = sum(1 for cell in region if self.grid_map.get_cell(cell).search_priority > 1.0)
+        return SupplementalCandidate(
+            cells=set(region),
+            uncovered_cells=len(region),
+            priority_uncovered_cells=priority_uncovered_cells,
+            uncovered_value=uncovered_value,
+            priority_value=priority_value,
+            nearest_uav_distance=nearest_distance,
+            estimated_cost_m=estimated_cost_m,
+            score=score,
+            entry_point=entry_point,
+            waypoints=waypoints,
+        )
+
+    def _weighted_region_value(self, region: set[Position]) -> tuple[float, float]:
+        search_config = self.config["search"]
+        uncovered_weight = float(search_config.get("uncovered_value_weight", 1.0))
+        priority_cell_weight = float(search_config.get("priority_cell_weight", 3.0))
+        priority_value_weight = float(search_config.get("priority_value_weight", 2.0))
+        uncovered_value = float(len(region)) * uncovered_weight
+        raw_priority_value = sum(max(0.0, self.grid_map.get_cell(cell).search_priority - 1.0) for cell in region)
+        priority_value = raw_priority_value * priority_cell_weight * priority_value_weight
+        return uncovered_value, priority_value
+
+    def _is_valuable_supplemental_candidate(self, candidate: SupplementalCandidate) -> bool:
+        search_config = self.config["search"]
+        priority_exception = candidate.priority_uncovered_cells > 0 and not self._priority_goal_met()
+        if priority_exception:
+            return True
+        if candidate.uncovered_cells < int(search_config.get("min_supplemental_cells", 8)):
+            return False
+        return candidate.score >= float(search_config.get("min_supplemental_score", 0.15))
+
+    def _priority_goal_met(self) -> bool:
+        threshold = float(self.config["search"].get("priority_complete_threshold", 0.98))
+        priority_cells = self.grid_map.get_priority_cells()
+        return not priority_cells or self.grid_map.coverage_rate(priority_only=True) >= threshold
+
+    def _mission_goal_met(self) -> bool:
+        if not self._priority_goal_met():
+            return False
+        global_threshold = float(self.config["search"].get("mission_complete_coverage_threshold", 0.92))
+        return self.grid_map.coverage_rate() >= global_threshold or not self._has_valuable_supplemental_candidates()
+
+    def _has_valuable_supplemental_candidates(self) -> bool:
+        return bool(self._get_supplemental_candidates())
 
     def _get_reserved_search_cells(self) -> set[Position]:
         reserved: set[Position] = set()
@@ -428,7 +548,10 @@ class Scheduler:
         return footprint
 
     def _dispatch_completed_search_returns(self, now: float) -> list[DecisionCommand]:
-        if not self._search_tasks_finished() or self._get_unsearched_cells():
+        if not bool(self.config["search"].get("allow_early_return", True)):
+            if not self._search_tasks_finished() or self._get_unsearched_cells():
+                return []
+        if self.task_manager.get_pending_tasks() or not self._mission_goal_met():
             return []
 
         commands: list[DecisionCommand] = []

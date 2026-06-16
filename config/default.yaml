@@ -6,7 +6,7 @@ map:
 uav:
   count: 1
   max_speed_mps: 10.0
-  sensor_radius_cells: 2
+  sensor_radius_cells: 3
   endurance_s: 1800
   battery_threshold: 0.2
   home_position: [0, 0]
@@ -15,10 +15,22 @@ search:
   decay_lambda: 0.01
   decay_threshold: 0.3
   coverage_complete_threshold: 0.95
+  mission_complete_coverage_threshold: 0.92
+  priority_complete_threshold: 0.98
   confirm_duration_steps: 5
   confirm_orbit_radius_cells: 2
   confirm_orbit_laps: 1
   supplemental_task_max_cells: 80
+  min_supplemental_cells: 8
+  min_supplemental_score: 0.15
+  supplemental_cluster_max_cells: 80
+  supplemental_cluster_radius_cells: 4
+  allow_early_return: true
+  priority_cell_weight: 3.0
+  distance_cost_weight: 1.0
+  uncovered_value_weight: 1.0
+  priority_value_weight: 2.0
+  redundant_penalty_weight: 0.5
 
 auction:
   w_distance: 1.0

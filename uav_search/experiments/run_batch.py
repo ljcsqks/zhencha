@@ -28,6 +28,14 @@ SUMMARY_FIELDS = [
     "confirm_done_count",
     "time_to_95_coverage_s",
     "time_to_priority_coverage_s",
+    "coverage_goal_met",
+    "priority_goal_met",
+    "supplemental_task_count",
+    "ignored_uncovered_cells",
+    "final_uncovered_cells",
+    "final_priority_uncovered_cells",
+    "post_95_extra_time_s",
+    "post_95_extra_distance_m",
 ]
 
 

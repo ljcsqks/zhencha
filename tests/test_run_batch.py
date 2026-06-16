@@ -1,4 +1,5 @@
 import json
+import csv
 from pathlib import Path
 
 from uav_search.experiments.run_batch import run_batch
@@ -25,3 +26,7 @@ def test_run_batch_outputs_per_scenario_artifacts(tmp_path: Path) -> None:
 
     summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     assert {row["run_id"] for row in summary} == {"basic_single_uav", "dynamic_basic"}
+    with (tmp_path / "summary.csv").open("r", encoding="utf-8") as handle:
+        header = next(csv.reader(handle))
+    assert "supplemental_task_count" in header
+    assert "ignored_uncovered_cells" in header

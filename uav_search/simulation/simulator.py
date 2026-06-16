@@ -182,6 +182,8 @@ class Simulator:
                         "status": state.status.value,
                         "battery": state.battery,
                         "task_id": state.current_task_id,
+                        "total_distance_m": state.total_distance_m,
+                        "effective_search_distance_m": state.effective_search_distance_m,
                     }
                     for state in self.fleet.get_all_states()
                 ],

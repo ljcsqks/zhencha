@@ -25,6 +25,8 @@ def generate_initial_tasks(
             continue
         entry_point = nearest_cell(waypoints, home)
         priority = max(grid_map.get_cell(cell).search_priority for cell in region)
+        estimated_cost_m = estimate_task_cost(waypoints, entry_point, grid_map.resolution_m)
+        uncovered_value, priority_value = compute_region_value(region, grid_map)
         task_id = f"task_{next(task_ids):03d}"
         tasks.append(
             Task(
@@ -34,8 +36,12 @@ def generate_initial_tasks(
                 target_cells=set(region),
                 entry_point=entry_point,
                 waypoints=waypoints,
+                estimated_cost_m=estimated_cost_m,
                 created_at=created_at,
                 updated_at=created_at,
+                uncovered_value=uncovered_value,
+                priority_value=priority_value,
+                score=(uncovered_value + priority_value) / max(estimated_cost_m, 1.0),
             )
         )
     return tasks
@@ -77,6 +83,38 @@ def nearest_cell(cells: list[Position] | set[Position], origin: Position) -> Pos
     if not cells:
         raise ValueError("cells must not be empty")
     return min(cells, key=lambda cell: abs(cell.x - origin.x) + abs(cell.y - origin.y))
+
+
+def reorder_waypoints_for_uav(waypoints: list[Position], uav_position: Position) -> list[Position]:
+    if len(waypoints) <= 1:
+        return list(waypoints)
+
+    candidates = [
+        list(waypoints),
+        list(reversed(waypoints)),
+    ]
+    nearest_index = min(range(len(waypoints)), key=lambda index: _manhattan(waypoints[index], uav_position))
+    candidates.append([*waypoints[nearest_index:], *waypoints[:nearest_index]])
+    reversed_waypoints = list(reversed(waypoints))
+    reversed_nearest_index = min(
+        range(len(reversed_waypoints)),
+        key=lambda index: _manhattan(reversed_waypoints[index], uav_position),
+    )
+    candidates.append([*reversed_waypoints[reversed_nearest_index:], *reversed_waypoints[:reversed_nearest_index]])
+
+    return min(candidates, key=lambda candidate: _route_cost_cells(candidate, start=uav_position))
+
+
+def estimate_task_cost(waypoints: list[Position], entry_point: Position, resolution_m: float) -> float:
+    if not waypoints:
+        return 0.0
+    return (_manhattan(entry_point, waypoints[0]) + _route_cost_cells(waypoints)) * resolution_m
+
+
+def compute_region_value(region: set[Position], grid_map: GridMap) -> tuple[float, float]:
+    uncovered_value = float(len(region))
+    priority_value = sum(max(0.0, grid_map.get_cell(cell).search_priority - 1.0) for cell in region)
+    return uncovered_value, priority_value
 
 
 def _connected_components(cells: set[Position], grid_map: GridMap) -> list[set[Position]]:
@@ -188,3 +226,11 @@ def _nearest_region_index(cell: Position, regions: list[set[Position]]) -> int:
 
 def _manhattan(a: Position, b: Position) -> int:
     return abs(a.x - b.x) + abs(a.y - b.y)
+
+
+def _route_cost_cells(waypoints: list[Position], start: Position | None = None) -> int:
+    if not waypoints:
+        return 0
+    cost = _manhattan(start, waypoints[0]) if start is not None else 0
+    cost += sum(_manhattan(a, b) for a, b in zip(waypoints, waypoints[1:]))
+    return cost

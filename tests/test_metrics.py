@@ -11,6 +11,7 @@ from uav_search.uav.uav_model import UAV
 def test_compute_metrics_counts_events_and_coverage() -> None:
     grid_map = GridMap(width_m=20, height_m=10, resolution_m=10)
     grid_map.mark_covered(Position(0, 0), radius_cells=0, timestamp=1.0)
+    grid_map.mark_covered(Position(1, 0), radius_cells=0, timestamp=2.0)
     state = UAVState(
         id="uav_01",
         position=Position(0, 0),
@@ -25,12 +26,19 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
     )
     fleet = FleetManager([UAV(state, endurance_s=100.0)])
     snapshots = [
-        {"time_s": 1.0, "global_coverage": 0.5, "priority_coverage": 0.0, "events": ["scenario_target_found_001"]},
+        {
+            "time_s": 1.0,
+            "global_coverage": 0.5,
+            "priority_coverage": 0.0,
+            "events": ["scenario_target_found_001"],
+            "uavs": [{"position": {"x": 0, "y": 0}, "total_distance_m": 5.0, "task_id": None}],
+        },
         {
             "time_s": 2.0,
             "global_coverage": 1.0,
             "priority_coverage": 0.0,
             "events": ["confirm_done_confirm_target_001", "scenario_map_update_002"],
+            "uavs": [{"position": {"x": 0, "y": 0}, "total_distance_m": 20.0, "task_id": "supplemental_001"}],
         },
     ]
 
@@ -45,6 +53,13 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
     assert metrics.confirm_done_count == 1
     assert metrics.path_efficiency == 0.5
     assert metrics.time_to_95_coverage_s == 2.0
+    assert metrics.coverage_goal_met
+    assert metrics.priority_goal_met
+    assert metrics.supplemental_task_count == 1
+    assert metrics.final_uncovered_cells == 0
+    assert metrics.ignored_uncovered_cells == 0
+    assert metrics.post_95_extra_time_s == 0.0
+    assert metrics.post_95_extra_distance_m == 0.0
 
 
 def test_save_metrics_writes_json(tmp_path: Path) -> None:

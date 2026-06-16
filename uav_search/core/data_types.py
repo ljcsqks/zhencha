@@ -266,6 +266,9 @@ class Task:
     updated_at: float = 0.0
     progress: float = 0.0
     source_event_id: str | None = None
+    uncovered_value: float = 0.0
+    priority_value: float = 0.0
+    score: float = 0.0
 
 
 @dataclass
