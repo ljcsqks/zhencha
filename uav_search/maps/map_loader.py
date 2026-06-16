@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from uav_search.core.data_types import CellType, Position
@@ -40,6 +41,8 @@ def _apply_feature(
     shape = feature.get("shape")
     if shape == "rectangle":
         cells = _rectangle_cells(grid_map, feature)
+    elif shape == "circle":
+        cells = _circle_cells(grid_map, feature)
     elif shape == "polygon":
         cells = _polygon_cells(grid_map, feature)
     else:
@@ -73,6 +76,29 @@ def _rectangle_cells(grid_map: GridMap, feature: dict[str, Any]) -> list[Positio
         for x in range(start.x, end.x):
             pos = Position(x, y)
             if grid_map.in_bounds(pos):
+                cells.append(pos)
+    return cells
+
+
+def _circle_cells(grid_map: GridMap, feature: dict[str, Any]) -> list[Position]:
+    frame = feature.get("frame", "world")
+    if frame == "world":
+        center = grid_map.world_to_grid(float(feature["center_x_m"]), float(feature["center_y_m"]))
+        radius_cells = int(math.ceil(float(feature["radius_m"]) / grid_map.resolution_m))
+    elif frame == "grid":
+        center = Position(int(feature["center_x"]), int(feature["center_y"]))
+        radius_cells = int(feature["radius"])
+    else:
+        raise ValueError(f"Unsupported frame: {frame}")
+
+    cells: list[Position] = []
+    radius_sq = radius_cells * radius_cells
+    for y in range(center.y - radius_cells, center.y + radius_cells + 1):
+        for x in range(center.x - radius_cells, center.x + radius_cells + 1):
+            pos = Position(x, y)
+            if not grid_map.in_bounds(pos):
+                continue
+            if (x - center.x) ** 2 + (y - center.y) ** 2 <= radius_sq:
                 cells.append(pos)
     return cells
 

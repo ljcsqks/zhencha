@@ -75,6 +75,34 @@ python -m uav_search.main --config config/default.yaml --scenario config/scenari
 
 `--play` 会在仿真结束后打开 matplotlib 窗口，回放 UAV 移动、覆盖区域累计变化和事件触发。需要本机 Python/matplotlib 支持 GUI 后端；如果只想保存结果图，继续使用 `--image` 和 `--report-dir`。
 
+## 多目标禁飞区场景
+
+新增 3 个多目标动态场景，可用于观察圆形禁飞区绕行、多个目标发现、盘旋确认、补搜和最终返航：
+
+```powershell
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/multi_target_no_fly.yaml --output runs/multi_target_no_fly_snapshots.json --image runs/multi_target_no_fly_view.png --metrics runs/multi_target_no_fly_metrics.json --report-dir runs/multi_target_no_fly_report
+```
+
+```powershell
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/urban_multi_target.yaml --output runs/urban_multi_target_snapshots.json --image runs/urban_multi_target_view.png --metrics runs/urban_multi_target_metrics.json --report-dir runs/urban_multi_target_report
+```
+
+```powershell
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/wide_random_targets.yaml --output runs/wide_random_targets_snapshots.json --image runs/wide_random_targets_view.png --metrics runs/wide_random_targets_metrics.json --report-dir runs/wide_random_targets_report
+```
+
+实时播放其中一个场景：
+
+```powershell
+python -m uav_search.main --config config/default.yaml --scenario config/scenarios/wide_random_targets.yaml --output runs/wide_random_targets_snapshots.json --play --play-interval-ms 100
+```
+
+批量运行所有基础与新增场景：
+
+```powershell
+python -m uav_search.experiments.run_batch --scenarios basic multi_basic dynamic_basic multi_target_no_fly urban_multi_target wide_random_targets --output-dir runs/batch_targets
+```
+
 ## 当前动态响应能力
 
 调度器当前支持以下高优先级事件：

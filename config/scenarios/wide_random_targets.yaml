@@ -1,0 +1,137 @@
+name: "wide_random_targets"
+description: "五目标宽域搜索场景：目标位置按固定随机样例分布，包含多个圆形禁飞区。"
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 300
+    resolution_m: 10
+  uav:
+    count: 5
+  simulation:
+    max_steps: 460
+  search:
+    supplemental_task_max_cells: 100
+
+map_features:
+  obstacles:
+    - id: "long_building_east"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 350
+      y_m: 70
+      width_m: 45
+      height_m: 140
+    - id: "long_building_west"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 155
+      y_m: 40
+      width_m: 35
+      height_m: 120
+  no_fly_zones:
+    - id: "nfz_alpha"
+      shape: "circle"
+      frame: "world"
+      center_x_m: 90
+      center_y_m: 90
+      radius_m: 25
+    - id: "nfz_bravo"
+      shape: "circle"
+      frame: "world"
+      center_x_m: 245
+      center_y_m: 215
+      radius_m: 30
+    - id: "nfz_charlie"
+      shape: "circle"
+      frame: "world"
+      center_x_m: 410
+      center_y_m: 235
+      radius_m: 25
+    - id: "nfz_delta"
+      shape: "circle"
+      frame: "world"
+      center_x_m: 445
+      center_y_m: 105
+      radius_m: 20
+  priority_zones:
+    - id: "wide_priority_a"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 300
+      y_m: 180
+      width_m: 75
+      height_m: 65
+      priority: 3.0
+    - id: "wide_priority_b"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 35
+      y_m: 205
+      width_m: 70
+      height_m: 55
+      priority: 2.5
+
+uavs:
+  - id: "uav_01"
+    home_position: [0, 0]
+    initial_position: [0, 0]
+    battery: 1.0
+  - id: "uav_02"
+    home_position: [0, 7]
+    initial_position: [0, 7]
+    battery: 1.0
+  - id: "uav_03"
+    home_position: [0, 15]
+    initial_position: [0, 15]
+    battery: 1.0
+  - id: "uav_04"
+    home_position: [0, 22]
+    initial_position: [0, 22]
+    battery: 1.0
+  - id: "uav_05"
+    home_position: [0, 29]
+    initial_position: [0, 29]
+    battery: 1.0
+
+events:
+  - time_s: 14
+    type: "TARGET_FOUND"
+    source_uav_id: "uav_02"
+    data:
+      target_id: "random_target_01"
+      position: {"x": 6, "y": 24}
+      confidence: 0.86
+      target_type: "person"
+  - time_s: 32
+    type: "TARGET_FOUND"
+    source_uav_id: "uav_05"
+    data:
+      target_id: "random_target_02"
+      position: {"x": 18, "y": 27}
+      confidence: 0.9
+      target_type: "vehicle"
+  - time_s: 58
+    type: "TARGET_FOUND"
+    source_uav_id: "uav_03"
+    data:
+      target_id: "random_target_03"
+      position: {"x": 31, "y": 8}
+      confidence: 0.88
+      target_type: "person"
+  - time_s: 88
+    type: "TARGET_FOUND"
+    source_uav_id: "uav_01"
+    data:
+      target_id: "random_target_04"
+      position: {"x": 43, "y": 16}
+      confidence: 0.85
+      target_type: "person"
+  - time_s: 122
+    type: "TARGET_FOUND"
+    source_uav_id: "uav_04"
+    data:
+      target_id: "random_target_05"
+      position: {"x": 48, "y": 27}
+      confidence: 0.93
+      target_type: "vehicle"

@@ -1,5 +1,6 @@
 from uav_search.core.data_types import CellType, Position
 from uav_search.maps.grid_map import GridMap
+from uav_search.maps.map_loader import build_grid_map
 
 
 def test_world_to_grid_uses_resolution() -> None:
@@ -26,3 +27,31 @@ def test_mark_covered_updates_confidence_and_count() -> None:
     assert Position(5, 5) in covered
     assert grid_map.get_cell(Position(5, 5)).search_confidence == 1.0
     assert grid_map.coverage_count[5, 5] == 1
+
+
+def test_circle_no_fly_zone_from_scenario() -> None:
+    config = {
+        "map": {"width_m": 100, "height_m": 100, "resolution_m": 10},
+        "scenario": {
+            "map_features": {
+                "obstacles": [],
+                "priority_zones": [],
+                "no_fly_zones": [
+                    {
+                        "id": "no_fly_circle",
+                        "shape": "circle",
+                        "frame": "grid",
+                        "center_x": 5,
+                        "center_y": 5,
+                        "radius": 2,
+                    }
+                ],
+            }
+        },
+    }
+
+    grid_map = build_grid_map(config)
+
+    assert grid_map.get_cell(Position(5, 5)).cell_type == CellType.NO_FLY
+    assert not grid_map.is_passable(Position(7, 5))
+    assert grid_map.is_passable(Position(8, 5))
