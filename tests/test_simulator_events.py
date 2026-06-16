@@ -58,5 +58,5 @@ def test_simulator_completes_target_confirmation() -> None:
 
     simulator.run(scheduler=scheduler)
 
-    assert fleet.get_uav("uav_01").state.status == UAVStatus.IDLE
+    assert fleet.get_uav("uav_01").state.status != UAVStatus.CONFIRMING
     assert any("confirm_done_confirm_target_home" in snapshot["events"] for snapshot in simulator.snapshots)

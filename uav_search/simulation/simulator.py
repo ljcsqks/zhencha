@@ -94,6 +94,9 @@ class Simulator:
         if scheduler is not None:
             _, handled_ids = scheduler.update_after_step(self.time_s)
             self._last_events.extend(handled_ids)
+            if scheduler.should_run_regular_cycle():
+                decision = scheduler.regular_cycle(now=self.time_s)
+                self._last_events.extend(decision.events_handled)
 
         # 记录当前时间步的快照
         self.record_snapshot()
@@ -143,7 +146,7 @@ class Simulator:
 
                 # 步骤2: 执行决策循环
                 # 如果有待处理事件，执行完整的决策流程
-                if scheduler.event_manager.has_events():
+                if scheduler.should_run_regular_cycle():
                     decision = scheduler.regular_cycle(now=self.time_s)
                     self._last_events = decision.events_handled
 

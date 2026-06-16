@@ -314,6 +314,21 @@ class Scheduler:
         coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         self.task_manager.update_progress(self.grid_map, now=now, coverage_threshold=coverage_threshold)
         self.task_manager.refresh_pending_waypoints(self.grid_map, now=now, coverage_threshold=coverage_threshold)
+        self._complete_finished_search_tasks(now)
+
+    def should_run_regular_cycle(self) -> bool:
+        return self.event_manager.has_events() or (
+            bool(self.task_manager.get_pending_tasks()) and bool(self.fleet.get_available_uavs())
+        )
+
+    def _complete_finished_search_tasks(self, now: float) -> None:
+        for task in self.task_manager.get_active_tasks():
+            if task.type != TaskType.SEARCH or task.assigned_uav_id is None:
+                continue
+            uav = self.fleet.get_uav(task.assigned_uav_id).state
+            path_finished = bool(uav.path) and uav.path_index >= len(uav.path) - 1
+            if uav.current_task_id == task.id and uav.status == UAVStatus.IDLE and path_finished:
+                self.task_manager.complete_task(task.id, now=now)
 
     def _dispatch_completed_search_returns(self, now: float) -> list[DecisionCommand]:
         if not self._search_tasks_finished():
