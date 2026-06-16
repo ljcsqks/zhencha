@@ -266,3 +266,27 @@ def test_finished_search_route_gets_supplemental_task_when_coverage_remains() ->
     assert any(assignment.task_id.startswith("supplemental_") for assignment in output.assignments)
     assert any(command.command == CommandType.FOLLOW_PATH for command in output.commands)
     assert fleet.get_uav("uav_01").state.status == UAVStatus.SEARCHING
+
+
+def test_supplemental_task_avoids_committed_search_footprints() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/multi_basic.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    initial_output = scheduler.regular_cycle(now=0.0)
+    finished_task_id = next(assignment.task_id for assignment in initial_output.assignments if assignment.uav_id == "uav_01")
+    finished_state = fleet.get_uav("uav_01").state
+    finished_state.position = finished_state.path[-1]
+    finished_state.path_index = len(finished_state.path) - 1
+    finished_state.status = UAVStatus.IDLE
+    finished_state.available = True
+
+    scheduler.update_after_step(now=10.0)
+    reserved_by_active_uavs = scheduler._get_reserved_search_cells()
+    output = scheduler.regular_cycle(now=10.0)
+
+    supplemental_ids = {assignment.task_id for assignment in output.assignments if assignment.task_id.startswith("supplemental_")}
+    assert supplemental_ids
+    assert scheduler.task_manager.tasks[finished_task_id].status == TaskStatus.COMPLETED
+    for task_id in supplemental_ids:
+        assert scheduler.task_manager.tasks[task_id].target_cells.isdisjoint(reserved_by_active_uavs)

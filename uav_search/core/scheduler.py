@@ -323,7 +323,7 @@ class Scheduler:
         return self.event_manager.has_events() or (
             bool(self.task_manager.get_pending_tasks()) and bool(self.fleet.get_available_uavs())
         ) or (
-            bool(self.fleet.get_available_uavs()) and bool(self._get_unsearched_cells())
+            bool(self.fleet.get_available_uavs()) and bool(self._get_supplemental_candidates())
         )
 
     def _complete_finished_search_tasks(self, now: float) -> None:
@@ -340,13 +340,7 @@ class Scheduler:
         if not available_uavs:
             return
 
-        reserved = {
-            cell
-            for task in self.task_manager.tasks.values()
-            if task.type == TaskType.SEARCH and task.status == TaskStatus.PENDING
-            for cell in task.target_cells
-        }
-        candidates = set(self._get_unsearched_cells()) - reserved
+        candidates = self._get_supplemental_candidates()
         if not candidates:
             return
 
@@ -393,6 +387,45 @@ class Scheduler:
     def _get_unsearched_cells(self) -> list[Position]:
         threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         return self.grid_map.get_unsearched_cells(threshold=threshold)
+
+    def _get_supplemental_candidates(self) -> set[Position]:
+        return set(self._get_unsearched_cells()) - self._get_reserved_search_cells()
+
+    def _get_reserved_search_cells(self) -> set[Position]:
+        reserved: set[Position] = set()
+        coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
+        for task in self.task_manager.tasks.values():
+            if task.type != TaskType.SEARCH:
+                continue
+            if task.status == TaskStatus.PENDING:
+                reserved.update(
+                    cell
+                    for cell in task.target_cells
+                    if self.grid_map.get_cell(cell).search_confidence < coverage_threshold
+                )
+                continue
+            if task.status not in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS) or task.assigned_uav_id is None:
+                continue
+            uav = self.fleet.get_uav(task.assigned_uav_id).state
+            if uav.status != UAVStatus.SEARCHING or not uav.path:
+                continue
+            # Reserve the sensor footprint of already committed remaining search paths so helpers do not duplicate it.
+            reserved.update(self._path_coverage_footprint(uav.path[uav.path_index :], uav.sensor_radius_cells))
+        return reserved
+
+    def _path_coverage_footprint(self, path: list[Position], radius_cells: int) -> set[Position]:
+        footprint: set[Position] = set()
+        radius_sq = radius_cells * radius_cells
+        for center in path:
+            for y in range(center.y - radius_cells, center.y + radius_cells + 1):
+                for x in range(center.x - radius_cells, center.x + radius_cells + 1):
+                    pos = Position(x, y)
+                    if not self.grid_map.is_passable(pos):
+                        continue
+                    if (x - center.x) ** 2 + (y - center.y) ** 2 > radius_sq:
+                        continue
+                    footprint.add(pos)
+        return footprint
 
     def _dispatch_completed_search_returns(self, now: float) -> list[DecisionCommand]:
         if not self._search_tasks_finished() or self._get_unsearched_cells():
