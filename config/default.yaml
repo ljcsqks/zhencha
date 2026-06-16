@@ -18,6 +18,7 @@ search:
   confirm_duration_steps: 5
   confirm_orbit_radius_cells: 2
   confirm_orbit_laps: 1
+  supplemental_task_max_cells: 80
 
 auction:
   w_distance: 1.0

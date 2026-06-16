@@ -9,7 +9,7 @@ overrides:
   uav:
     count: 3
   simulation:
-    max_steps: 120
+    max_steps: 180
 
 map_features:
   obstacles:

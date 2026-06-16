@@ -7,7 +7,7 @@ overrides:
     height_m: 200
     resolution_m: 10
   simulation:
-    max_steps: 80
+    max_steps: 180
 
 map_features:
   obstacles:

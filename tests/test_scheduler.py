@@ -245,7 +245,7 @@ def test_completed_search_dispatches_return_home() -> None:
     assert fleet.get_uav("uav_01").state.status == UAVStatus.RETURNING
 
 
-def test_finished_search_route_dispatches_return_home() -> None:
+def test_finished_search_route_gets_supplemental_task_when_coverage_remains() -> None:
     config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -258,8 +258,11 @@ def test_finished_search_route_dispatches_return_home() -> None:
     state.status = UAVStatus.IDLE
     state.available = True
 
-    commands, _ = scheduler.update_after_step(now=10.0)
+    scheduler.update_after_step(now=10.0)
+    assert scheduler.should_run_regular_cycle()
+    output = scheduler.regular_cycle(now=10.0)
 
     assert scheduler.task_manager.tasks[task_id].status == TaskStatus.COMPLETED
-    assert any(command.command == CommandType.RETURN_HOME and command.reason == "mission_complete" for command in commands)
-    assert fleet.get_uav("uav_01").state.status == UAVStatus.RETURNING
+    assert any(assignment.task_id.startswith("supplemental_") for assignment in output.assignments)
+    assert any(command.command == CommandType.FOLLOW_PATH for command in output.commands)
+    assert fleet.get_uav("uav_01").state.status == UAVStatus.SEARCHING
