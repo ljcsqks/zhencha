@@ -125,6 +125,39 @@ def test_target_found_requeues_interrupted_search_task() -> None:
     assert scheduler.task_manager.tasks[interrupted_task_id].status == TaskStatus.PENDING
 
 
+def test_interrupted_search_task_resumes_with_uncovered_waypoints_only() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    initial_output = scheduler.regular_cycle(now=0.0)
+    interrupted_task_id = initial_output.assignments[0].task_id
+    task = scheduler.task_manager.tasks[interrupted_task_id]
+    covered_waypoint = task.waypoints[0]
+    grid_map.set_cell(covered_waypoint, {"search_confidence": 1.0})
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=1.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id="uav_01",
+            data={
+                "target_id": "target_001",
+                "position": {"x": 5, "y": 5},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+    scheduler.regular_cycle(now=1.0)
+
+    resumed_task = scheduler.task_manager.tasks[interrupted_task_id]
+    assert resumed_task.status == TaskStatus.PENDING
+    assert covered_waypoint not in resumed_task.waypoints
+
+
 def test_scheduler_completes_confirmation_after_dwell_steps() -> None:
     config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
     config["search"]["confirm_duration_steps"] = 2
