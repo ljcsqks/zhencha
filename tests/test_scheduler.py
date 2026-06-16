@@ -97,6 +97,39 @@ def test_scheduler_handles_target_found_event() -> None:
     assert fleet.get_uav("uav_01").state.status == UAVStatus.CONFIRMING
 
 
+def test_target_confirmation_uses_orbit_path() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config["search"]["confirm_orbit_radius_cells"] = 2
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    target = {"x": 5, "y": 5}
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id="uav_01",
+            data={
+                "target_id": "target_001",
+                "position": target,
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+    output = scheduler.regular_cycle(now=0.0)
+
+    command = next(command for command in output.commands if command.command == CommandType.CONFIRM_TARGET)
+    orbit_points = scheduler._confirmations["confirm_target_001"]["orbit_waypoints"]
+    assert orbit_points
+    assert command.path[-1] == orbit_points[-1]
+    assert all(max(abs(point.x - target["x"]), abs(point.y - target["y"])) == 2 for point in orbit_points)
+    assert all(point != command.target for point in orbit_points)
+
+
 def test_target_found_requeues_interrupted_search_task() -> None:
     config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
     grid_map = build_grid_map(config)
@@ -160,7 +193,7 @@ def test_interrupted_search_task_resumes_with_uncovered_waypoints_only() -> None
 
 def test_scheduler_completes_confirmation_after_dwell_steps() -> None:
     config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
-    config["search"]["confirm_duration_steps"] = 2
+    config["search"]["confirm_duration_steps"] = 1
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -180,12 +213,33 @@ def test_scheduler_completes_confirmation_after_dwell_steps() -> None:
         )
     )
     scheduler.regular_cycle(now=0.0)
+    state = fleet.get_uav("uav_01").state
+    state.position = state.path[-1]
+    state.path_index = len(state.path) - 1
 
     first_commands, first_events = scheduler.update_after_step(now=1.0)
-    second_commands, second_events = scheduler.update_after_step(now=2.0)
 
-    assert not first_commands
-    assert not first_events
-    assert "confirm_done_confirm_target_001" in second_events
-    assert any(command.reason == "confirm_done" for command in second_commands)
+    assert "confirm_done_confirm_target_001" in first_events
+    assert any(command.reason == "confirm_done" for command in first_commands)
     assert fleet.get_uav("uav_01").state.status == UAVStatus.IDLE
+
+
+def test_completed_search_dispatches_return_home() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    output = scheduler.regular_cycle(now=0.0)
+    task_id = output.assignments[0].task_id
+    task = scheduler.task_manager.tasks[task_id]
+    for cell in task.target_cells:
+        grid_map.set_cell(cell, {"search_confidence": 1.0})
+    state = fleet.get_uav("uav_01").state
+    state.status = UAVStatus.IDLE
+    state.available = True
+    state.position = task.waypoints[-1]
+
+    commands, _ = scheduler.update_after_step(now=10.0)
+
+    assert any(command.command == CommandType.RETURN_HOME and command.reason == "mission_complete" for command in commands)
+    assert fleet.get_uav("uav_01").state.status == UAVStatus.RETURNING

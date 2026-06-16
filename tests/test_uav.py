@@ -59,3 +59,26 @@ def test_diagonal_step_uses_movement_carry() -> None:
     assert first_step == 0.0
     assert second_step > 14.0
     assert state.position == Position(1, 1)
+
+
+def test_returning_uav_becomes_idle_at_home() -> None:
+    state = UAVState(
+        id="uav_01",
+        position=Position(1, 0),
+        velocity_mps=10.0,
+        heading_deg=0.0,
+        battery=1.0,
+        sensor_radius_cells=2,
+        status=UAVStatus.IDLE,
+        home_position=Position(0, 0),
+        current_task_id="return_task",
+    )
+    uav = UAV(state, endurance_s=100.0)
+    uav.assign_path([Position(1, 0), Position(0, 0)], status=UAVStatus.RETURNING)
+
+    uav.move_along_path(time_step_s=1.0, resolution_m=10.0)
+
+    assert state.position == Position(0, 0)
+    assert state.status == UAVStatus.IDLE
+    assert state.available
+    assert state.current_task_id is None

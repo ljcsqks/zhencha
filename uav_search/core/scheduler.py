@@ -17,7 +17,7 @@ from typing import Any
 
 from uav_search.allocation.auction import SequentialAuction
 from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOutput, Event, EventPriority, EventType, Position
-from uav_search.core.data_types import UAVState, UAVStatus
+from uav_search.core.data_types import TaskStatus, TaskType, UAVState, UAVStatus
 from uav_search.core.event_manager import EventManager
 from uav_search.maps.grid_map import GridMap
 from uav_search.maps.map_updater import MapUpdater
@@ -172,6 +172,8 @@ class Scheduler:
             )
         )
 
+        commands.extend(self._dispatch_completed_search_returns(now))
+
         # 计算决策延迟并返回结果
         latency_ms = (time.perf_counter() - started) * 1000.0
         return DecisionOutput(
@@ -236,8 +238,8 @@ class Scheduler:
     def update_after_step(self, now: float) -> tuple[list[DecisionCommand], list[str]]:
         """仿真步进后更新任务状态
 
-        在每个仿真步进后调用，检查目标确认任务的完成条件。
-        当无人机到达目标位置并停留足够时间后，触发确认完成事件。
+        在每个仿真步进后调用，检查目标确认任务和返航任务的完成条件。
+        当无人机完成目标周边盘旋航线并满足确认步数后，触发确认完成事件。
 
         参数：
             now: 当前时间戳（秒）
@@ -246,8 +248,8 @@ class Scheduler:
             tuple: (决策指令列表, 已处理的事件ID列表)
 
         设计思路：
-            - 目标确认需要无人机抵近并停留一段时间
-            - 停留时间由配置参数 confirm_duration_steps 决定
+            - 目标确认需要无人机抵近到目标周边并完成盘旋航线
+            - 确认步数由配置参数 confirm_duration_steps 决定
             - 完成后触发 CONFIRM_DONE 事件
         """
         commands: list[DecisionCommand] = []
@@ -255,16 +257,15 @@ class Scheduler:
         self._refresh_task_progress(now)
         for task_id, confirmation in list(self._confirmations.items()):
             uav = self.fleet.get_uav(confirmation["uav_id"]).state
-            target = confirmation["target"]
 
-            # 检查无人机是否仍在确认状态且到达目标位置
-            if uav.status != UAVStatus.CONFIRMING or uav.position != target:
+            # 盘旋确认以“完成目标周边航线”为完成条件，而不是停在目标格上。
+            if uav.status != UAVStatus.CONFIRMING or uav.path_index < len(uav.path) - 1:
                 continue
 
-            # 增加停留计数
+            # 增加确认计数
             confirmation["dwell_steps"] += 1
 
-            # 检查是否达到确认所需停留时间
+            # 检查是否达到确认所需步数
             if confirmation["dwell_steps"] < int(self.config["search"]["confirm_duration_steps"]):
                 continue
 
@@ -279,6 +280,7 @@ class Scheduler:
             )
             commands.extend(self.handle_event(event))
             handled_ids.append(event.id)
+        commands.extend(self._dispatch_completed_search_returns(now))
         return commands, handled_ids
 
     def _ensure_initial_tasks(self, now: float) -> None:
@@ -312,6 +314,49 @@ class Scheduler:
         coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         self.task_manager.update_progress(self.grid_map, now=now, coverage_threshold=coverage_threshold)
         self.task_manager.refresh_pending_waypoints(self.grid_map, now=now, coverage_threshold=coverage_threshold)
+
+    def _dispatch_completed_search_returns(self, now: float) -> list[DecisionCommand]:
+        if not self._search_tasks_finished():
+            return []
+
+        commands: list[DecisionCommand] = []
+        for uav in self.fleet.get_all_states():
+            if uav.status != UAVStatus.IDLE or uav.position == uav.home_position:
+                continue
+            plan = self.planner.plan_path(uav, uav.home_position, self.grid_map, task_id=uav.current_task_id)
+            if not plan.valid:
+                commands.append(
+                    DecisionCommand(
+                        uav_id=uav.id,
+                        command=CommandType.HOLD,
+                        task_id=uav.current_task_id,
+                        target=uav.home_position,
+                        path=[],
+                        reason="mission_complete_return_path_not_found",
+                    )
+                )
+                continue
+            self.fleet.assign_path(uav.id, plan.path, status=UAVStatus.RETURNING)
+            commands.append(
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.RETURN_HOME,
+                    task_id=uav.current_task_id,
+                    target=uav.home_position,
+                    path=plan.path,
+                    reason="mission_complete",
+                )
+            )
+        return commands
+
+    def _search_tasks_finished(self) -> bool:
+        if not self.task_manager.tasks:
+            return False
+        active_statuses = {TaskStatus.PENDING, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS}
+        return all(
+            task.type != TaskType.SEARCH or task.status not in active_statuses
+            for task in self.task_manager.tasks.values()
+        )
 
     def _plan_route_through_waypoints(self, uav_state: UAVState, waypoints: list[Position]) -> list[Position]:
         """规划经过多个航路点的路径
@@ -528,16 +573,19 @@ class Scheduler:
         confirm_task_id = f"confirm_{target_data.get('target_id', event.id)}"
         uav.current_task_id = confirm_task_id
 
+        orbit_waypoints = self._build_confirm_orbit(target)
+
         # 记录确认任务状态，用于后续判断完成
         self._confirmations[confirm_task_id] = {
             "uav_id": uav.id,
             "target": target,
+            "orbit_waypoints": orbit_waypoints,
             "target_id": target_data.get("target_id", event.id),
             "dwell_steps": 0,
         }
 
-        plan = self.planner.plan_path(uav, target, self.grid_map, task_id=confirm_task_id)
-        if not plan.valid:
+        route = self._plan_route_through_waypoints(uav, orbit_waypoints)
+        if not route:
             return [
                 DecisionCommand(
                     uav_id=uav.id,
@@ -545,21 +593,49 @@ class Scheduler:
                     task_id=confirm_task_id,
                     target=target,
                     path=[],
-                    reason="target_confirm_path_not_found",
+                    reason="target_confirm_orbit_path_not_found",
                 )
             ]
 
-        self.fleet.assign_path(uav.id, plan.path, status=UAVStatus.CONFIRMING)
+        self.fleet.assign_path(uav.id, route, status=UAVStatus.CONFIRMING)
         return [
             DecisionCommand(
                 uav_id=uav.id,
                 command=CommandType.CONFIRM_TARGET,
                 task_id=confirm_task_id,
                 target=target,
-                path=plan.path,
+                path=route,
                 reason="target_found",
             )
         ]
+
+    def _build_confirm_orbit(self, target: Position) -> list[Position]:
+        radius = max(1, int(self.config["search"].get("confirm_orbit_radius_cells", 2)))
+        laps = max(1, int(self.config["search"].get("confirm_orbit_laps", 1)))
+
+        for current_radius in range(radius, 0, -1):
+            candidates = self._square_orbit_candidates(target, current_radius)
+            if candidates:
+                return candidates * laps
+
+        return [target] if self.grid_map.is_passable(target) else []
+
+    def _square_orbit_candidates(self, target: Position, radius: int) -> list[Position]:
+        candidates: list[Position] = []
+        seen: set[Position] = set()
+        offsets: list[tuple[int, int]] = []
+        offsets.extend((dx, -radius) for dx in range(-radius, radius + 1))
+        offsets.extend((radius, dy) for dy in range(-radius + 1, radius + 1))
+        offsets.extend((dx, radius) for dx in range(radius - 1, -radius - 1, -1))
+        offsets.extend((-radius, dy) for dy in range(radius - 1, -radius, -1))
+
+        for dx, dy in offsets:
+            pos = Position(target.x + dx, target.y + dy)
+            if pos in seen or not self.grid_map.is_passable(pos):
+                continue
+            seen.add(pos)
+            candidates.append(pos)
+        return candidates
 
     def _handle_confirm_done(self, event: Event) -> list[DecisionCommand]:
         """处理目标确认完成事件

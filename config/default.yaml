@@ -16,6 +16,8 @@ search:
   decay_threshold: 0.3
   coverage_complete_threshold: 0.95
   confirm_duration_steps: 5
+  confirm_orbit_radius_cells: 2
+  confirm_orbit_laps: 1
 
 auction:
   w_distance: 1.0

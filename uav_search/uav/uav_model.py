@@ -24,6 +24,7 @@ class UAV:
             return 0.0
         if self.state.path_index >= len(self.state.path) - 1:
             self.state.position = self.state.path[-1]
+            self._finish_completed_path()
             return 0.0
 
         movement_budget_m = self._movement_carry_m + self.state.velocity_mps * time_step_s
@@ -44,10 +45,20 @@ class UAV:
             self.state.total_distance_m += traveled_m
             if self.state.status == UAVStatus.SEARCHING:
                 self.state.effective_search_distance_m += traveled_m
-            if self.state.path_index >= len(self.state.path) - 1 and self.state.status == UAVStatus.SEARCHING:
-                self.state.status = UAVStatus.IDLE
-                self.state.available = True
+            self._finish_completed_path()
         return traveled_m
+
+    def _finish_completed_path(self) -> None:
+        if self.state.path_index < len(self.state.path) - 1:
+            return
+        if self.state.status == UAVStatus.SEARCHING:
+            self.state.status = UAVStatus.IDLE
+            self.state.available = True
+        elif self.state.status == UAVStatus.RETURNING:
+            # Returning is a terminal transit state; once home is reached the UAV can accept future missions.
+            self.state.status = UAVStatus.IDLE
+            self.state.available = True
+            self.state.current_task_id = None
 
     def consume_battery(self, distance_m: float) -> None:
         if self.state.velocity_mps <= 0:

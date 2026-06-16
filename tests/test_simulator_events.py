@@ -35,7 +35,7 @@ def test_simulator_injects_due_scenario_events() -> None:
 def test_simulator_completes_target_confirmation() -> None:
     config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
     config["search"]["confirm_duration_steps"] = 1
-    config["simulation"]["max_steps"] = 2
+    config["simulation"]["max_steps"] = 8
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
