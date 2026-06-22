@@ -269,6 +269,15 @@ class Task:
     uncovered_value: float = 0.0
     priority_value: float = 0.0
     score: float = 0.0
+    coverage_waypoints: list[Position] = field(default_factory=list)
+    last_replan_time: float = 0.0
+    replan_count: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.coverage_waypoints and self.waypoints:
+            self.coverage_waypoints = list(self.waypoints)
+        elif self.coverage_waypoints and not self.waypoints:
+            self.waypoints = list(self.coverage_waypoints)
 
 
 @dataclass

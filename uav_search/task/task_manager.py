@@ -15,7 +15,11 @@ class TaskManager:
     def get_pending_tasks(self) -> list[Task]:
         return sorted(
             # Empty-waypoint tasks are considered complete or stale and should not enter allocation.
-            (task for task in self.tasks.values() if task.status == TaskStatus.PENDING and task.waypoints),
+            (
+                task
+                for task in self.tasks.values()
+                if task.status == TaskStatus.PENDING and (task.coverage_waypoints or task.waypoints)
+            ),
             key=lambda task: (-task.priority, task.created_at, task.id),
         )
 
@@ -86,11 +90,14 @@ class TaskManager:
             if task.status != TaskStatus.PENDING:
                 continue
             # When an interrupted task returns to the queue, keep only waypoints that still need search coverage.
-            task.waypoints = [
+            source_waypoints = task.coverage_waypoints or task.waypoints
+            task.coverage_waypoints = [
                 waypoint
-                for waypoint in task.waypoints
-                if grid_map.get_cell(waypoint).search_confidence < coverage_threshold
+                for waypoint in source_waypoints
+                if grid_map.is_passable(waypoint)
+                and grid_map.get_cell(waypoint).search_confidence < coverage_threshold
             ]
+            task.waypoints = list(task.coverage_waypoints)
             task.updated_at = now
-            if not task.waypoints:
+            if not task.coverage_waypoints:
                 self.complete_task(task.id, now=now)

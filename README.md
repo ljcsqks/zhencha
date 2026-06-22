@@ -1,121 +1,65 @@
-# 多无人机区域协同搜索决策模型
+# 多无人机区域协同搜索仿真
 
-当前仓库已完成首轮可运行闭环：
-
-- YAML 配置和基础场景加载
-- 核心枚举与 dataclass 数据结构
-- 栅格地图、障碍物、禁飞区、重点区域建模
-- UAV 状态、电量消耗、路径跟随
-- A* 路径规划
-- 搜索任务生成、均衡连通区域划分、Boustrophedon 覆盖航路点
-- 顺序单物品拍卖任务分配
-- 固定周期调度器
-- 基础冲突检测与等待消解
-- 事件管理器与低电量/离线高优先级事件处理
-- 基础仿真步进和覆盖率更新
-- `snapshots.json` 仿真快照输出
-- 地图、UAV、A* 基础单元测试
+当前项目用于验证多架无人机在栅格地图上的区域搜索、重点区域优先覆盖、障碍物/禁飞区绕行、动态地图更新、补搜和返航逻辑。
 
 ## 环境
-
-建议使用 Python 3.10+。
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-本机已验证可使用：
+本机可用命令：
 
 ```powershell
-E:\anaconda\python.exe -m pytest -q
-E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/basic.yaml --output runs/basic_snapshots.json
+E:\anaconda\Scripts\pytest.exe -q
 ```
 
-## 运行测试
+## 当前场景
+
+所有预设场景均为 `500m x 500m`，分辨率 `10m/格`，即 `50 x 50` 栅格。场景暂不注入目标发现事件，先专注验证区域搜索策略。
+
+| 场景 | UAV 数量 | 内容 |
+|---|---:|---|
+| `area_search_1uav` | 1 | 单机基础区域搜索，含重点区、静态障碍和动态障碍更新 |
+| `area_search_2uav` | 2 | 双机上下分区搜索，含两个重点区、禁飞区和动态障碍 |
+| `area_search_3uav` | 3 | 三机区域搜索，含中部障碍、禁飞区、重点区和动态障碍 |
+| `area_search_4uav` | 4 | 四机复杂区域搜索，含多障碍、多禁飞区和重点区 |
+| `area_search_5uav` | 5 | 五机高密度区域搜索，含多重点区、多禁飞区和动态障碍 |
+
+## 单场景运行
 
 ```powershell
-pytest -q
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_1uav.yaml --output runs/area_search_1uav_snapshots.json --image runs/area_search_1uav_view.png --metrics runs/area_search_1uav_metrics.json --report-dir runs/area_search_1uav_report
 ```
 
-## 运行基础仿真
+实时播放：
 
 ```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/basic.yaml --output runs/basic_snapshots.json --image runs/basic_view.png --metrics runs/basic_metrics.json --report-dir runs/basic_report
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_3uav.yaml --output runs/area_search_3uav_snapshots.json --play --play-interval-ms 100
 ```
 
-运行完成后会输出仿真时间、覆盖率、重点区域覆盖率和首条路径规划耗时，并在 `runs/basic_snapshots.json` 写入快照，在 `runs/basic_view.png` 输出静态效果图，在 `runs/basic_metrics.json` 输出基础评估指标。
-
-## 运行多 UAV 基础场景
+## 批量运行全部 500x500 场景
 
 ```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/multi_basic.yaml --output runs/multi_basic_snapshots.json --image runs/multi_basic_view.png --metrics runs/multi_basic_metrics.json --report-dir runs/multi_basic_report
+E:\anaconda\python.exe -m uav_search.experiments.run_batch --scenarios area_search_1uav area_search_2uav area_search_3uav area_search_4uav area_search_5uav --output-dir runs/batch_area_search_500
 ```
 
-该场景会生成多个搜索任务，通过顺序拍卖分配给 3 架 UAV，并输出覆盖率快照和静态效果图。
+每个场景会输出：
 
-`--report-dir` 会额外输出：
+- `snapshots.json`
+- `metrics.json`
+- `final_view.png`
+- `report/coverage_curve.png`
+- `report/uav_trajectories.png`
+- `report/event_timeline.png`
 
-- `coverage_curve.png`
-- `uav_trajectories.png`
-- `event_timeline.png`
+批量目录还会生成 `summary.json` 和 `summary.csv`。
 
-## 批量运行多个场景
 
-```powershell
-python -m uav_search.experiments.run_batch --scenarios basic multi_basic dynamic_basic --output-dir runs/batch_001
-```
 
-每个场景会输出独立的 `snapshots.json`、`metrics.json`、`final_view.png` 和报告图表，批量目录下还会生成 `summary.json` 与 `summary.csv`。
-
-## 实时播放仿真过程
-
-```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/dynamic_basic.yaml --output runs/dynamic_basic_snapshots.json --play --play-interval-ms 120
-```
-
-`--play` 会在仿真结束后打开 matplotlib 窗口，回放 UAV 移动、覆盖区域累计变化和事件触发。需要本机 Python/matplotlib 支持 GUI 后端；如果只想保存结果图，继续使用 `--image` 和 `--report-dir`。
-
-## 多目标禁飞区场景
-
-新增 3 个多目标动态场景，可用于观察圆形禁飞区绕行、多个目标发现、盘旋确认、补搜和最终返航：
-
-```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/multi_target_no_fly.yaml --output runs/multi_target_no_fly_snapshots.json --image runs/multi_target_no_fly_view.png --metrics runs/multi_target_no_fly_metrics.json --report-dir runs/multi_target_no_fly_report
-```
-
-```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/urban_multi_target.yaml --output runs/urban_multi_target_snapshots.json --image runs/urban_multi_target_view.png --metrics runs/urban_multi_target_metrics.json --report-dir runs/urban_multi_target_report
-```
-
-```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/wide_random_targets.yaml --output runs/wide_random_targets_snapshots.json --image runs/wide_random_targets_view.png --metrics runs/wide_random_targets_metrics.json --report-dir runs/wide_random_targets_report
-```
-
-实时播放其中一个场景：
-
-```powershell
-python -m uav_search.main --config config/default.yaml --scenario config/scenarios/wide_random_targets.yaml --output runs/wide_random_targets_snapshots.json --play --play-interval-ms 100
-```
-
-批量运行所有基础与新增场景：
-
-```powershell
-python -m uav_search.experiments.run_batch --scenarios basic multi_basic dynamic_basic multi_target_no_fly urban_multi_target wide_random_targets --output-dir runs/batch_targets
-```
-
-## 当前动态响应能力
-
-调度器当前支持以下高优先级事件：
-
-- `LOW_BATTERY`：无人机切换为返航，并规划返回 home 的路径
-- `UAV_OFFLINE`：无人机标记为离线并停止执行路径
-- `MAP_UPDATE`：运行时更新地图，并对失效路径触发局部重规划
-- `TARGET_FOUND`：发现者切换为确认状态，并重规划至目标位置
-
-场景文件中的 `events` 会按 `time_s` 在仿真过程中自动注入。例如 `config/scenarios/dynamic_basic.yaml` 会在运行中注入 `TARGET_FOUND` 和 `MAP_UPDATE`。
-
-## 文档
-
-- `docs/superpowers/specs/2026-06-11-multi-uav-search-design.md`：总体设计方案
-- `docs/superpowers/specs/2026-06-11-implementation-plan.md`：详细实现计划
-- `docs/superpowers/specs/2026-06-11-development-readiness-spec.md`：开发前准备与接口规格
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_1uav.yaml --output runs/area_search_1uav_snapshots.json --play --play-interval-ms 100
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_2uav.yaml --output runs/area_search_2uav_snapshots.json --play --play-interval-ms 100
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_3uav.yaml --output runs/area_search_3uav_snapshots.json --play --play-interval-ms 100
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_4uav.yaml --output runs/area_search_4uav_snapshots.json --play --play-interval-ms 100
+E:\anaconda\python.exe -m uav_search.main --config config/default.yaml --scenario config/scenarios/area_search_5uav.yaml --output runs/area_search_5uav_snapshots.json --play --play-interval-ms 100
+如果想播放慢一点，把 --play-interval-ms 100 改成 150 或 200。

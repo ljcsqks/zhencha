@@ -274,7 +274,13 @@ class GridMap:
         ys, xs = np.where(mask)
         return [Position(int(x), int(y)) for y, x in zip(ys, xs)]
 
-    def mark_covered(self, center: Position, radius_cells: int, timestamp: float) -> list[Position]:
+    def mark_covered(
+        self,
+        center: Position,
+        radius_cells: int,
+        timestamp: float,
+        redundant_revisit_interval_s: float = 0.0,
+    ) -> list[Position]:
         """标记传感器覆盖区域
 
         当无人机飞越某位置时，标记其传感器覆盖范围内的栅格。
@@ -304,9 +310,17 @@ class GridMap:
                     continue
                 if (x - center.x) ** 2 + (y - center.y) ** 2 > radius_sq:
                     continue
+                previous_time = self.last_search_time[y, x]
+                should_count = (
+                    self.coverage_count[y, x] == 0
+                    or redundant_revisit_interval_s <= 0
+                    or np.isnan(previous_time)
+                    or timestamp - previous_time >= redundant_revisit_interval_s
+                )
                 self.search_confidence[y, x] = 1.0
                 self.last_search_time[y, x] = timestamp
-                self.coverage_count[y, x] += 1
+                if should_count:
+                    self.coverage_count[y, x] += 1
                 covered.append(pos)
         return covered
 

@@ -1,4 +1,4 @@
-from uav_search.core.config import load_config
+﻿from uav_search.core.config import load_config
 from uav_search.core.data_types import (
     CellType,
     CommandType,
@@ -17,7 +17,7 @@ from uav_search.uav.fleet_manager import FleetManager
 
 
 def test_scheduler_assigns_tasks_and_paths() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/multi_basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_3uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -30,7 +30,7 @@ def test_scheduler_assigns_tasks_and_paths() -> None:
 
 
 def test_scheduler_handles_low_battery_event() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/multi_basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_3uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -52,7 +52,7 @@ def test_scheduler_handles_low_battery_event() -> None:
 
 
 def test_scheduler_replans_invalid_path_after_map_update() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -81,7 +81,7 @@ def test_scheduler_replans_invalid_path_after_map_update() -> None:
 
 
 def test_scheduler_handles_target_found_event() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -109,7 +109,7 @@ def test_scheduler_handles_target_found_event() -> None:
 
 
 def test_target_confirmation_uses_orbit_path() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["confirm_orbit_radius_cells"] = 2
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -142,7 +142,7 @@ def test_target_confirmation_uses_orbit_path() -> None:
 
 
 def test_target_found_requeues_interrupted_search_task() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -170,7 +170,7 @@ def test_target_found_requeues_interrupted_search_task() -> None:
 
 
 def test_interrupted_search_task_resumes_with_uncovered_waypoints_only() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -203,7 +203,7 @@ def test_interrupted_search_task_resumes_with_uncovered_waypoints_only() -> None
 
 
 def test_scheduler_completes_confirmation_after_dwell_steps() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["confirm_duration_steps"] = 1
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -236,15 +236,14 @@ def test_scheduler_completes_confirmation_after_dwell_steps() -> None:
 
 
 def test_completed_search_dispatches_return_home() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     output = scheduler.regular_cycle(now=0.0)
     task_id = output.assignments[0].task_id
     task = scheduler.task_manager.tasks[task_id]
-    for cell in task.target_cells:
-        grid_map.set_cell(cell, {"search_confidence": 1.0})
+    _cover_all_cells_except(grid_map, set())
     state = fleet.get_uav("uav_01").state
     state.status = UAVStatus.IDLE
     state.available = True
@@ -257,7 +256,7 @@ def test_completed_search_dispatches_return_home() -> None:
 
 
 def test_finished_search_route_gets_supplemental_task_when_coverage_remains() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
@@ -279,8 +278,8 @@ def test_finished_search_route_gets_supplemental_task_when_coverage_remains() ->
     assert fleet.get_uav("uav_01").state.status == UAVStatus.SEARCHING
 
 
-def test_supplemental_task_avoids_committed_search_footprints() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/multi_basic.yaml")
+def test_idle_uav_takes_nonreserved_search_work() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_3uav.yaml")
     config["search"]["min_supplemental_cells"] = 1
     config["search"]["min_supplemental_score"] = 0.0
     grid_map = build_grid_map(config)
@@ -295,18 +294,27 @@ def test_supplemental_task_avoids_committed_search_footprints() -> None:
     finished_state.available = True
 
     scheduler.update_after_step(now=10.0)
-    reserved_by_active_uavs = scheduler._get_reserved_search_cells()
+    reserved_by_active_uavs = scheduler._get_active_search_footprint()
     output = scheduler.regular_cycle(now=10.0)
 
-    supplemental_ids = {assignment.task_id for assignment in output.assignments if assignment.task_id.startswith("supplemental_")}
-    assert supplemental_ids
+    assigned_ids = {assignment.task_id for assignment in output.assignments}
+    assert assigned_ids
     assert scheduler.task_manager.tasks[finished_task_id].status == TaskStatus.COMPLETED
-    for task_id in supplemental_ids:
-        assert scheduler.task_manager.tasks[task_id].target_cells.isdisjoint(reserved_by_active_uavs)
+    for task_id in assigned_ids:
+        task = scheduler.task_manager.tasks[task_id]
+        assert all(
+            scheduler._point_adds_unreserved_search_coverage(
+                waypoint,
+                int(config["uav"]["sensor_radius_cells"]),
+                float(config["search"]["coverage_complete_threshold"]),
+                reserved_by_active_uavs,
+            )
+            for waypoint in task.waypoints
+        )
 
 
 def test_small_ordinary_fragment_is_ignored_after_coverage_goal() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["min_supplemental_cells"] = 4
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -317,9 +325,27 @@ def test_small_ordinary_fragment_is_ignored_after_coverage_goal() -> None:
     assert scheduler._get_supplemental_candidates() == []
 
 
+def test_large_contiguous_region_is_searched_after_coverage_goal() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["search"]["min_supplemental_score"] = 999.0
+    grid_map = build_grid_map(config)
+    uncovered = {Position(x, y) for y in range(7) for x in range(7)}
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    _cover_all_cells_except(grid_map, uncovered)
+
+    candidates = scheduler._get_supplemental_candidates()
+
+    assert grid_map.coverage_rate() >= config["search"]["mission_complete_coverage_threshold"]
+    assert candidates
+    assert any(uncovered.issubset(candidate.cells) for candidate in candidates)
+    assert not scheduler._mission_goal_met()
+
+
 def test_priority_fragment_still_gets_supplemental_candidate() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["min_supplemental_cells"] = 8
+    config["search"]["priority_complete_threshold"] = 1.0
     grid_map = build_grid_map(config)
     priority_cell = Position(0, 0)
     grid_map.set_cell(priority_cell, {"cell_type": CellType.PRIORITY, "search_priority": 4.0})
@@ -335,7 +361,7 @@ def test_priority_fragment_still_gets_supplemental_candidate() -> None:
 
 
 def test_low_score_supplemental_region_is_ignored() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["min_supplemental_cells"] = 4
     config["search"]["min_supplemental_score"] = 999.0
     grid_map = build_grid_map(config)
@@ -348,7 +374,7 @@ def test_low_score_supplemental_region_is_ignored() -> None:
 
 
 def test_idle_uav_returns_when_only_ignored_fragments_remain() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["min_supplemental_cells"] = 4
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -366,7 +392,7 @@ def test_idle_uav_returns_when_only_ignored_fragments_remain() -> None:
 
 
 def test_assignment_reorders_task_waypoints_for_current_uav_position() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     _cover_all_cells_except(grid_map, {Position(0, 0), Position(9, 0)})
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -396,3 +422,4 @@ def test_assignment_reorders_task_waypoints_for_current_uav_position() -> None:
 def _cover_all_cells_except(grid_map, uncovered: set[Position]) -> None:
     for cell in grid_map.get_searchable_cells():
         grid_map.set_cell(cell, {"search_confidence": 0.0 if cell in uncovered else 1.0})
+

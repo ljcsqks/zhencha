@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Patch
 
 from uav_search.core.data_types import CellType, UAVState
@@ -17,6 +19,9 @@ TERRAIN_TO_VALUE = {
     CellType.OBSTACLE.value: 2,
     CellType.NO_FLY.value: 3,
 }
+TERRAIN_COLORS = ["#f8fafc", "#fde68a", "#334155", "#ef4444"]
+TERRAIN_CMAP = ListedColormap(TERRAIN_COLORS)
+TERRAIN_NORM = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], TERRAIN_CMAP.N)
 
 
 def render_static_map(
@@ -24,24 +29,36 @@ def render_static_map(
     uav_states: list[UAVState],
     output_path: str | Path,
     title: str = "UAV Search Simulation",
+    snapshots: list[dict[str, Any]] | None = None,
 ) -> Path:
-    """Render a single PNG with terrain, coverage, UAV positions, and paths."""
+    """Render terrain, coverage, final UAV positions, and flown trajectories."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     terrain_values = np.vectorize(TERRAIN_TO_VALUE.get)(grid_map.terrain)
     fig, ax = plt.subplots(figsize=(10, 7), dpi=140)
 
-    terrain_cmap = ListedColormap(["#f8fafc", "#fde68a", "#334155", "#ef4444"])
-    ax.imshow(terrain_values, origin="lower", cmap=terrain_cmap, interpolation="nearest", alpha=0.95)
+    ax.imshow(
+        terrain_values,
+        origin="lower",
+        cmap=TERRAIN_CMAP,
+        norm=TERRAIN_NORM,
+        interpolation="nearest",
+        alpha=0.95,
+    )
 
     # Coverage is drawn as a translucent blue layer so terrain remains readable.
     coverage = np.ma.masked_where(grid_map.search_confidence <= 0.0, grid_map.search_confidence)
     ax.imshow(coverage, origin="lower", cmap="Blues", interpolation="nearest", alpha=0.42, vmin=0.0, vmax=1.0)
 
+    tracks = _tracks_from_snapshots(snapshots or [])
     for index, state in enumerate(uav_states):
         color = f"C{index % 10}"
-        if state.path:
+        track = tracks.get(state.id, [])
+        if track:
+            xs, ys = zip(*track)
+            ax.plot(xs, ys, color=color, linewidth=1.4, alpha=0.9)
+        elif state.path:
             xs = [pos.x for pos in state.path]
             ys = [pos.y for pos in state.path]
             ax.plot(xs, ys, color=color, linewidth=1.3, alpha=0.85)
@@ -72,3 +89,14 @@ def render_static_map(
     fig.savefig(output)
     plt.close(fig)
     return output
+
+
+def _tracks_from_snapshots(snapshots: list[dict[str, Any]]) -> dict[str, list[tuple[int, int]]]:
+    tracks: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for snapshot in snapshots:
+        for uav in snapshot.get("uavs", []):
+            pos = uav.get("position", {})
+            point = (int(pos.get("x", 0)), int(pos.get("y", 0)))
+            if not tracks[str(uav.get("id"))] or tracks[str(uav.get("id"))][-1] != point:
+                tracks[str(uav.get("id"))].append(point)
+    return tracks

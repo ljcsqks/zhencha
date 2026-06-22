@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,10 @@ class MetricsResult:
     time_to_priority_coverage_s: float | None
     coverage_goal_met: bool
     priority_goal_met: bool
+    turn_rate: float
+    replan_count: int
+    coverage_gain_per_meter: float
+    per_uav_workload_balance: float
     supplemental_task_count: int
     ignored_uncovered_cells: int
     final_uncovered_cells: int
@@ -43,6 +48,7 @@ def compute_metrics(
     grid_map: GridMap,
     fleet: FleetManager,
     snapshots: list[dict[str, Any]],
+    mission_complete_coverage_threshold: float = 0.95,
 ) -> MetricsResult:
     """Compute first-pass metrics from final state and recorded snapshots."""
     states = fleet.get_all_states()
@@ -52,6 +58,7 @@ def compute_metrics(
     event_ids = [event_id for snapshot in snapshots for event_id in snapshot.get("events", [])]
     time_to_95 = _first_time_reaching(snapshots, "global_coverage", 0.95)
     final_time_s = float(snapshots[-1]["time_s"]) if snapshots else 0.0
+    initial_coverage = float(snapshots[0].get("global_coverage", 0.0)) if snapshots else 0.0
     final_uncovered_cells = len(grid_map.get_unsearched_cells(threshold=0.95))
     final_priority_uncovered_cells = _count_final_priority_uncovered(grid_map)
     supplemental_task_count = len(
@@ -81,10 +88,14 @@ def compute_metrics(
         confirm_done_count=sum(1 for event_id in event_ids if event_id.startswith("confirm_done_")),
         time_to_95_coverage_s=time_to_95,
         time_to_priority_coverage_s=_first_time_reaching(snapshots, "priority_coverage", 0.95),
-        coverage_goal_met=grid_map.coverage_rate() >= 0.92,
+        coverage_goal_met=grid_map.coverage_rate() >= mission_complete_coverage_threshold,
         priority_goal_met=grid_map.coverage_rate(priority_only=True) >= 0.98 or not grid_map.get_priority_cells(),
+        turn_rate=_turn_rate(snapshots, total_distance_m),
+        replan_count=_replan_count(snapshots, event_ids),
+        coverage_gain_per_meter=(grid_map.coverage_rate() - initial_coverage) / total_distance_m if total_distance_m > 0 else 0.0,
+        per_uav_workload_balance=_workload_balance([state.total_distance_m for state in states]),
         supplemental_task_count=supplemental_task_count,
-        ignored_uncovered_cells=final_uncovered_cells if grid_map.coverage_rate() >= 0.92 else 0,
+        ignored_uncovered_cells=final_uncovered_cells if grid_map.coverage_rate() >= mission_complete_coverage_threshold else 0,
         final_uncovered_cells=final_uncovered_cells,
         final_priority_uncovered_cells=final_priority_uncovered_cells,
         post_95_extra_time_s=None if time_to_95 is None else max(0.0, final_time_s - time_to_95),
@@ -144,3 +155,55 @@ def _post_threshold_distance(snapshots: list[dict[str, Any]], threshold_time_s: 
 
 def _snapshot_total_distance(snapshot: dict[str, Any]) -> float:
     return sum(float(uav.get("total_distance_m", 0.0)) for uav in snapshot.get("uavs", []))
+
+
+def _replan_count(snapshots: list[dict[str, Any]], event_ids: list[str]) -> int:
+    snapshot_count = max((int(snapshot.get("replan_count", 0)) for snapshot in snapshots), default=0)
+    event_count = sum(1 for event_id in event_ids if "replan" in event_id or "map_update" in event_id)
+    return max(snapshot_count, event_count)
+
+
+def _turn_rate(snapshots: list[dict[str, Any]], total_distance_m: float) -> float:
+    if total_distance_m <= 0:
+        return 0.0
+    previous_vectors: dict[str, tuple[int, int]] = {}
+    previous_positions: dict[str, tuple[int, int]] = {}
+    turns = 0
+    for snapshot in snapshots:
+        for uav in snapshot.get("uavs", []):
+            uav_id = str(uav.get("id"))
+            pos_data = uav.get("position", {})
+            current = (int(pos_data.get("x", 0)), int(pos_data.get("y", 0)))
+            previous = previous_positions.get(uav_id)
+            if previous is None:
+                previous_positions[uav_id] = current
+                continue
+            vector = (current[0] - previous[0], current[1] - previous[1])
+            if vector == (0, 0):
+                continue
+            old_vector = previous_vectors.get(uav_id)
+            if old_vector is not None and _normalized_step(vector) != _normalized_step(old_vector):
+                turns += 1
+            previous_vectors[uav_id] = vector
+            previous_positions[uav_id] = current
+    return turns / total_distance_m
+
+
+def _normalized_step(vector: tuple[int, int]) -> tuple[int, int]:
+    dx, dy = vector
+    return (
+        0 if dx == 0 else int(math.copysign(1, dx)),
+        0 if dy == 0 else int(math.copysign(1, dy)),
+    )
+
+
+def _workload_balance(distances: list[float]) -> float:
+    active = [distance for distance in distances if distance > 0]
+    if not active:
+        return 1.0
+    mean = sum(active) / len(active)
+    if mean <= 0:
+        return 1.0
+    variance = sum((distance - mean) ** 2 for distance in active) / len(active)
+    coefficient_of_variation = math.sqrt(variance) / mean
+    return 1.0 / (1.0 + coefficient_of_variation)

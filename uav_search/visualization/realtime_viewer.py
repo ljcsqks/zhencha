@@ -6,12 +6,11 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation
-from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 
 from uav_search.core.data_types import CellType, Position
 from uav_search.maps.grid_map import GridMap
-from uav_search.visualization.static_viewer import TERRAIN_TO_VALUE
+from uav_search.visualization.static_viewer import TERRAIN_CMAP, TERRAIN_NORM, TERRAIN_TO_VALUE
 
 
 def build_realtime_animation(
@@ -35,8 +34,14 @@ def build_realtime_animation(
     tracks = _tracks_by_uav(snapshots)
 
     fig, ax = plt.subplots(figsize=(10, 7), dpi=110)
-    terrain_cmap = ListedColormap(["#f8fafc", "#fde68a", "#334155", "#ef4444"])
-    ax.imshow(terrain_values, origin="lower", cmap=terrain_cmap, interpolation="nearest", alpha=0.95)
+    ax.imshow(
+        terrain_values,
+        origin="lower",
+        cmap=TERRAIN_CMAP,
+        norm=TERRAIN_NORM,
+        interpolation="nearest",
+        alpha=0.95,
+    )
     coverage_image = ax.imshow(
         np.ma.masked_where(coverage <= 0.0, coverage),
         origin="lower",

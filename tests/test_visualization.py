@@ -1,11 +1,12 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_hex
 
-from uav_search.core.data_types import Position, UAVState, UAVStatus
+from uav_search.core.data_types import CellType, Position, UAVState, UAVStatus
 from uav_search.maps.grid_map import GridMap
 from uav_search.visualization.realtime_viewer import build_realtime_animation
-from uav_search.visualization.static_viewer import render_static_map
+from uav_search.visualization.static_viewer import TERRAIN_CMAP, TERRAIN_NORM, TERRAIN_TO_VALUE, render_static_map
 
 
 def test_render_static_map_creates_png(tmp_path: Path) -> None:
@@ -54,3 +55,12 @@ def test_build_realtime_animation_draws_first_frame() -> None:
     assert animation is not None
     assert fig.axes
     plt.close(fig)
+
+
+def test_terrain_colors_do_not_shift_when_types_are_absent() -> None:
+    mapped_colors = [
+        to_hex(TERRAIN_CMAP(TERRAIN_NORM(TERRAIN_TO_VALUE[cell_type.value])))
+        for cell_type in (CellType.FREE, CellType.PRIORITY, CellType.OBSTACLE, CellType.NO_FLY)
+    ]
+
+    assert mapped_colors == ["#f8fafc", "#fde68a", "#334155", "#ef4444"]

@@ -3,7 +3,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
-runs/
 .vscode/
 .venv/
 venv/

@@ -85,9 +85,15 @@ class Simulator:
 
         # 标记传感器覆盖区域
         # 每架无人机飞过的地方，其传感器覆盖范围内的栅格被标记为已搜索
+        revisit_interval_s = float(self.config["search"].get("redundant_revisit_interval_s", 0.0))
         for state in self.fleet.get_all_states():
             if state.status != UAVStatus.OFFLINE:
-                self.grid_map.mark_covered(state.position, state.sensor_radius_cells, self.time_s)
+                self.grid_map.mark_covered(
+                    state.position,
+                    state.sensor_radius_cells,
+                    self.time_s,
+                    redundant_revisit_interval_s=revisit_interval_s,
+                )
 
         # 决策后处理
         # 检查是否有需要更新状态的任务（如目标确认完成）
@@ -99,7 +105,7 @@ class Simulator:
                 self._last_events.extend(decision.events_handled)
 
         # 记录当前时间步的快照
-        self.record_snapshot()
+        self.record_snapshot(scheduler=scheduler)
 
     def run(
         self,
@@ -133,8 +139,23 @@ class Simulator:
             - 决策包括：事件处理、任务分配、路径规划、冲突消解
         """
         steps = int(max_steps if max_steps is not None else self.config["simulation"]["max_steps"])
+        mission_grace_steps = int(self.config["simulation"].get("mission_grace_steps", 0))
+        return_grace_steps = int(self.config["simulation"].get("return_home_grace_steps", 0))
+        steps_run = 0
+        mission_grace_used = 0
+        return_grace_used = 0
 
-        for _ in range(steps):
+        while (
+            steps_run < steps
+            or self._should_extend_for_activity(mission_grace_used, mission_grace_steps)
+            or self._should_extend_for_return(return_grace_used, return_grace_steps)
+        ):
+            steps_run += 1
+            if steps_run > steps:
+                if self._should_extend_for_activity(mission_grace_used, mission_grace_steps):
+                    mission_grace_used += 1
+                elif self._should_extend_for_return(return_grace_used, return_grace_steps):
+                    return_grace_used += 1
             self._last_events = []
 
             # 决策循环（如果提供了调度器）
@@ -158,7 +179,17 @@ class Simulator:
             if all(state.status in (UAVStatus.IDLE, UAVStatus.OFFLINE) for state in self.fleet.get_all_states()):
                 break
 
-    def record_snapshot(self) -> None:
+    def _should_extend_for_activity(self, grace_used: int, grace_limit: int) -> bool:
+        if grace_used >= grace_limit:
+            return False
+        return any(state.status not in (UAVStatus.IDLE, UAVStatus.OFFLINE) for state in self.fleet.get_all_states())
+
+    def _should_extend_for_return(self, grace_used: int, grace_limit: int) -> bool:
+        if grace_used >= grace_limit:
+            return False
+        return any(state.status == UAVStatus.RETURNING for state in self.fleet.get_all_states())
+
+    def record_snapshot(self, scheduler: Scheduler | None = None) -> None:
         """记录当前时间步的快照
 
         将当前时刻的系统状态保存为快照，包括：
@@ -175,6 +206,7 @@ class Simulator:
                 "time_s": self.time_s,
                 "global_coverage": self.grid_map.coverage_rate(),
                 "priority_coverage": self.grid_map.coverage_rate(priority_only=True),
+                "replan_count": scheduler.replan_count if scheduler is not None else 0,
                 "uavs": [
                     {
                         "id": state.id,

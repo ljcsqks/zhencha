@@ -30,12 +30,16 @@ SUMMARY_FIELDS = [
     "time_to_priority_coverage_s",
     "coverage_goal_met",
     "priority_goal_met",
+    "turn_rate",
+    "replan_count",
+    "coverage_gain_per_meter",
+    "post_95_extra_distance_m",
+    "per_uav_workload_balance",
     "supplemental_task_count",
     "ignored_uncovered_cells",
     "final_uncovered_cells",
     "final_priority_uncovered_cells",
     "post_95_extra_time_s",
-    "post_95_extra_distance_m",
 ]
 
 
@@ -103,7 +107,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run multiple UAV search scenarios and summarize metrics.")
     parser.add_argument("--config", type=Path, default=Path("config/default.yaml"))
     parser.add_argument("--scenario-dir", type=Path, default=Path("config/scenarios"))
-    parser.add_argument("--scenarios", nargs="+", default=["basic", "multi_basic", "dynamic_basic"])
+    parser.add_argument(
+        "--scenarios",
+        nargs="+",
+        default=[
+            "area_search_1uav",
+            "area_search_2uav",
+            "area_search_3uav",
+            "area_search_4uav",
+            "area_search_5uav",
+        ],
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("runs/batch"))
     args = parser.parse_args()
 

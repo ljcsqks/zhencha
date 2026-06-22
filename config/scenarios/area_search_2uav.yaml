@@ -1,0 +1,69 @@
+name: "area_search_2uav"
+description: "500x500 area search with two UAVs, separated priority zones, one no-fly circle, and dynamic obstacle insertion."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 2
+  simulation:
+    max_steps: 750
+
+map_features:
+  obstacles:
+    - id: "mid_block"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 235
+      y_m: 140
+      width_m: 45
+      height_m: 180
+  no_fly_zones:
+    - id: "northwest_restricted"
+      shape: "circle"
+      frame: "world"
+      center_x_m: 120
+      center_y_m: 360
+      radius_m: 30
+  priority_zones:
+    - id: "south_priority"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 340
+      y_m: 95
+      width_m: 80
+      height_m: 65
+      priority: 3.0
+    - id: "north_priority"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 325
+      y_m: 350
+      width_m: 85
+      height_m: 65
+      priority: 3.0
+
+uavs:
+  - id: "uav_01"
+    home_position: [0, 8]
+    initial_position: [0, 8]
+    battery: 1.0
+  - id: "uav_02"
+    home_position: [0, 41]
+    initial_position: [0, 41]
+    battery: 1.0
+
+events:
+  - time_s: 180
+    type: "MAP_UPDATE"
+    data:
+      operation: "SET_REGION"
+      shape: "rectangle"
+      frame: "grid"
+      x: 14
+      y: 22
+      width: 5
+      height: 5
+      cell_type: "OBSTACLE"

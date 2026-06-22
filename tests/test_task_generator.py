@@ -46,8 +46,16 @@ def test_boustrophedon_path_alternates_rows() -> None:
 
     path = generate_boustrophedon_path(region, sensor_radius_cells=1)
 
-    assert path[:4] == [Position(0, 0), Position(1, 0), Position(2, 0), Position(3, 0)]
-    assert path[4:8] == [Position(3, 2), Position(2, 2), Position(1, 2), Position(0, 2)]
+    assert path[:3] == [Position(0, 0), Position(2, 0), Position(3, 0)]
+    assert path[3:6] == [Position(3, 2), Position(2, 2), Position(0, 2)]
+
+
+def test_boustrophedon_path_samples_rows_and_columns_by_sensor_radius() -> None:
+    region = {Position(x, y) for y in range(5) for x in range(5)}
+
+    path = generate_boustrophedon_path(region, sensor_radius_cells=2)
+
+    assert path == [Position(0, 0), Position(4, 0), Position(4, 4), Position(0, 4)]
 
 
 def test_generate_initial_tasks_creates_search_tasks() -> None:
@@ -61,6 +69,59 @@ def test_generate_initial_tasks_creates_search_tasks() -> None:
     assert all(task.estimated_cost_m > 0 for task in tasks)
     assert all(task.uncovered_value == len(task.target_cells) for task in tasks)
     assert all(task.score > 0 for task in tasks)
+
+
+def test_generate_initial_tasks_splits_priority_region_first() -> None:
+    grid_map = GridMap(width_m=100, height_m=100, resolution_m=10)
+    priority_cells = {Position(x, y) for y in range(7, 9) for x in range(7, 9)}
+    for cell in priority_cells:
+        grid_map.set_cell(cell, {"cell_type": CellType.PRIORITY, "search_priority": 3.0})
+
+    tasks = generate_initial_tasks(
+        grid_map,
+        uav_count=2,
+        sensor_radius_cells=1,
+        home=Position(0, 0),
+        origins=[Position(0, 0), Position(0, 9)],
+    )
+
+    assert tasks[0].priority == 3.0
+    assert priority_cells.issubset(tasks[0].target_cells)
+    assert all(cell not in task.target_cells for task in tasks[1:] for cell in priority_cells)
+
+
+def test_generate_initial_tasks_uses_uav_origins_for_ordinary_regions() -> None:
+    grid_map = GridMap(width_m=120, height_m=120, resolution_m=10)
+
+    tasks = generate_initial_tasks(
+        grid_map,
+        uav_count=2,
+        sensor_radius_cells=1,
+        home=Position(0, 0),
+        origins=[Position(0, 0), Position(0, 11)],
+    )
+    low_region, high_region = tasks
+
+    assert max(cell.y for cell in low_region.target_cells) < min(cell.y for cell in high_region.target_cells)
+
+
+def test_generate_initial_tasks_scales_horizontal_bands_for_tall_maps() -> None:
+    grid_map = GridMap(width_m=500, height_m=500, resolution_m=10)
+    origins = [Position(0, 0), Position(0, 8), Position(0, 16), Position(0, 23)]
+
+    tasks = generate_initial_tasks(
+        grid_map,
+        uav_count=4,
+        sensor_radius_cells=2,
+        home=Position(0, 0),
+        origins=origins,
+    )
+    y_ranges = sorted((min(cell.y for cell in task.target_cells), max(cell.y for cell in task.target_cells)) for task in tasks)
+
+    assert len(tasks) == 4
+    assert y_ranges[0][0] == 0
+    assert y_ranges[-1][1] == 49
+    assert all(previous[1] < current[0] for previous, current in zip(y_ranges, y_ranges[1:]))
 
 
 def test_reorder_waypoints_starts_near_current_uav() -> None:

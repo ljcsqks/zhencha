@@ -7,7 +7,7 @@ from uav_search.uav.fleet_manager import FleetManager
 
 
 def test_scenario_event_injector_emits_due_events_once() -> None:
-    config = load_config("config/default.yaml", "config/scenarios/basic.yaml")
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)

@@ -26,7 +26,7 @@ from uav_search.maps.map_updater import MapUpdater
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
 from uav_search.planning.path_planner import PathPlanner
 from uav_search.task.task_generator import estimate_task_cost
-from uav_search.task.task_generator import generate_boustrophedon_path, generate_initial_tasks, nearest_cell
+from uav_search.task.task_generator import connected_components, generate_boustrophedon_path, generate_initial_tasks, nearest_cell
 from uav_search.task.task_generator import reorder_waypoints_for_uav
 from uav_search.task.task_manager import TaskManager
 from uav_search.uav.fleet_manager import FleetManager
@@ -93,6 +93,7 @@ class Scheduler:
         self._confirmations: dict[str, dict[str, Any]] = {}  # 追踪目标确认任务状态
         self._initialized = False  # 标记是否已生成初始任务
         self._supplemental_task_seq = 0
+        self.replan_count = 0
 
     def regular_cycle(self, now: float = 0.0) -> DecisionOutput:
         """执行一次完整的决策周期
@@ -143,10 +144,14 @@ class Scheduler:
             assignment = self.task_manager.assign_task(task.id, proposed.uav_id, now=now, bid_value=proposed.bid_value)
             uav_state = self.fleet.get_uav(proposed.uav_id).state
 
-            # 规划经过所有航路点的路径
-            task.waypoints = reorder_waypoints_for_uav(task.waypoints, uav_state.position)
-            task.entry_point = task.waypoints[0]
-            route = self._plan_route_through_waypoints(uav_state, task.waypoints)
+            coverage_waypoints = reorder_waypoints_for_uav(
+                self._task_coverage_waypoints(task),
+                uav_state.position,
+            )
+            task.coverage_waypoints = coverage_waypoints
+            task.waypoints = list(coverage_waypoints)
+            task.entry_point = coverage_waypoints[0]
+            route = self._plan_route_through_waypoints(uav_state, coverage_waypoints)
             if not route:
                 # 路径规划失败，标记任务为阻塞状态
                 self.task_manager.mark_blocked(task.id, now=now)
@@ -172,7 +177,7 @@ class Scheduler:
                     uav_id=uav_state.id,
                     command=CommandType.FOLLOW_PATH,
                     task_id=task.id,
-                    target=task.waypoints[-1],
+                    target=coverage_waypoints[-1],
                     path=route,
                     reason="auction_search_task",
                 )
@@ -327,6 +332,7 @@ class Scheduler:
             uav_count=int(self.config["uav"]["count"]),
             sensor_radius_cells=int(self.config["uav"]["sensor_radius_cells"]),
             home=states[0].home_position,
+            origins=[state.position for state in states],
             created_at=now,
         )
         self.task_manager.add_tasks(tasks)
@@ -336,6 +342,8 @@ class Scheduler:
         coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         self.task_manager.update_progress(self.grid_map, now=now, coverage_threshold=coverage_threshold)
         self.task_manager.refresh_pending_waypoints(self.grid_map, now=now, coverage_threshold=coverage_threshold)
+        self._trim_pending_search_waypoints_against_reserved(now, coverage_threshold)
+        self._trim_redundant_active_search_paths(now, coverage_threshold)
         self._complete_finished_search_tasks(now)
 
     def should_run_regular_cycle(self) -> bool:
@@ -376,6 +384,7 @@ class Scheduler:
                     target_cells=set(candidate.cells),
                     entry_point=candidate.entry_point,
                     waypoints=candidate.waypoints,
+                    coverage_waypoints=list(candidate.waypoints),
                     estimated_cost_m=candidate.estimated_cost_m,
                     created_at=now,
                     updated_at=now,
@@ -389,13 +398,13 @@ class Scheduler:
     def _collect_supplemental_region(self, seed: Position, candidates: set[Position], max_cells: int) -> set[Position]:
         region = {seed}
         queue = [seed]
-        max_radius = max(1, int(self.config["search"].get("supplemental_cluster_radius_cells", 4)))
+        max_radius = int(self.config["search"].get("supplemental_cluster_radius_cells", 0))
         while queue and len(region) < max_cells:
             current = queue.pop(0)
             for neighbor in self.grid_map.get_neighbors(current, mode=4):
                 if neighbor not in candidates or neighbor in region:
                     continue
-                if abs(neighbor.x - seed.x) + abs(neighbor.y - seed.y) > max_radius:
+                if max_radius > 0 and abs(neighbor.x - seed.x) + abs(neighbor.y - seed.y) > max_radius:
                     continue
                 region.add(neighbor)
                 queue.append(neighbor)
@@ -493,8 +502,12 @@ class Scheduler:
         priority_exception = candidate.priority_uncovered_cells > 0 and not self._priority_goal_met()
         if priority_exception:
             return True
+        if self._coverage_goal_reached():
+            return candidate.priority_uncovered_cells > 0 or candidate.uncovered_cells >= self._post_goal_ordinary_min_cells()
         if candidate.uncovered_cells < int(search_config.get("min_supplemental_cells", 8)):
             return False
+        if candidate.uncovered_cells >= int(search_config.get("large_supplemental_region_cells", 16)):
+            return True
         return candidate.score >= float(search_config.get("min_supplemental_score", 0.15))
 
     def _priority_goal_met(self) -> bool:
@@ -503,10 +516,19 @@ class Scheduler:
         return not priority_cells or self.grid_map.coverage_rate(priority_only=True) >= threshold
 
     def _mission_goal_met(self) -> bool:
-        if not self._priority_goal_met():
+        if not self._coverage_goal_reached():
             return False
-        global_threshold = float(self.config["search"].get("mission_complete_coverage_threshold", 0.92))
-        return self.grid_map.coverage_rate() >= global_threshold or not self._has_valuable_supplemental_candidates()
+        return not self._has_valuable_supplemental_candidates()
+
+    def _coverage_goal_reached(self) -> bool:
+        global_threshold = float(self.config["search"].get("mission_complete_coverage_threshold", 0.95))
+        return self.grid_map.coverage_rate() >= global_threshold and self._priority_goal_met()
+
+    def _post_goal_ordinary_min_cells(self) -> int:
+        return max(
+            int(self.config["search"].get("large_supplemental_region_cells", 16)),
+            int(self.config["search"].get("post_goal_ordinary_min_cells", 40)),
+        )
 
     def _has_valuable_supplemental_candidates(self) -> bool:
         return bool(self._get_supplemental_candidates())
@@ -546,6 +568,210 @@ class Scheduler:
                         continue
                     footprint.add(pos)
         return footprint
+
+    def _task_coverage_waypoints(self, task: Task) -> list[Position]:
+        waypoints = task.coverage_waypoints or task.waypoints
+        return [point for point in waypoints if self.grid_map.is_passable(point)]
+
+    def _set_task_coverage_waypoints(self, task: Task, waypoints: list[Position], now: float) -> None:
+        task.coverage_waypoints = list(waypoints)
+        task.waypoints = list(waypoints)
+        if waypoints:
+            task.entry_point = waypoints[0]
+            task.estimated_cost_m = estimate_task_cost(waypoints, task.entry_point, self.grid_map.resolution_m)
+        task.updated_at = now
+
+    def _trim_redundant_active_search_paths(
+        self,
+        now: float,
+        coverage_threshold: float,
+        force_replan: bool = False,
+    ) -> None:
+        for task in self.task_manager.get_active_tasks():
+            if task.type != TaskType.SEARCH or task.assigned_uav_id is None:
+                continue
+            uav = self.fleet.get_uav(task.assigned_uav_id).state
+            if uav.status != UAVStatus.SEARCHING or not uav.path:
+                continue
+
+            coverage_points = self._task_coverage_waypoints(task)
+            useful_waypoints = [
+                point
+                for point in coverage_points
+                if self._point_adds_search_coverage(point, uav.sensor_radius_cells, coverage_threshold)
+            ]
+            useful_waypoints = self._filter_post_goal_waypoints(task, useful_waypoints, uav.sensor_radius_cells, coverage_threshold)
+            if len(useful_waypoints) == len(coverage_points) and not force_replan:
+                continue
+
+            if not useful_waypoints:
+                uav.path = [uav.position]
+                uav.path_index = 0
+                uav.status = UAVStatus.IDLE
+                uav.available = True
+                self.task_manager.complete_task(task.id, now=now)
+                continue
+
+            self._set_task_coverage_waypoints(task, useful_waypoints, now)
+            if not self._should_replan_active_search(task, uav, coverage_points, useful_waypoints, now, force_replan):
+                continue
+            route = self._plan_route_through_waypoints(uav, useful_waypoints)
+            if not route:
+                self.task_manager.mark_blocked(task.id, now=now)
+                continue
+            self.fleet.assign_path(uav.id, route, status=UAVStatus.SEARCHING)
+            task.last_replan_time = now
+            task.replan_count += 1
+            self.replan_count += 1
+
+    def _should_replan_active_search(
+        self,
+        task: Task,
+        uav: UAVState,
+        previous_waypoints: list[Position],
+        useful_waypoints: list[Position],
+        now: float,
+        force_replan: bool,
+    ) -> bool:
+        if force_replan:
+            return True
+        if not self.planner.is_path_valid(uav.path[uav.path_index :], self.grid_map):
+            return True
+        min_interval = float(self.config["search"].get("active_replan_min_interval_s", 60.0))
+        if now - task.last_replan_time < min_interval:
+            return False
+        previous_count = max(1, len(previous_waypoints))
+        if len(useful_waypoints) / previous_count <= float(self.config["search"].get("active_replan_low_gain_ratio", 0.35)):
+            return True
+        return self._is_near_scanline_end(uav.position, previous_waypoints)
+
+    def _is_near_scanline_end(self, position: Position, waypoints: list[Position]) -> bool:
+        row_points = [point for point in waypoints if point.y == position.y]
+        if not row_points:
+            return False
+        nearest_end_distance = min(
+            abs(min(point.x for point in row_points) - position.x),
+            abs(max(point.x for point in row_points) - position.x),
+        )
+        return nearest_end_distance <= max(1, int(self.config["uav"]["sensor_radius_cells"]))
+
+    def _trim_pending_search_waypoints_against_reserved(self, now: float, coverage_threshold: float) -> None:
+        reserved = self._get_active_search_footprint()
+        if not reserved:
+            return
+        for task in self.task_manager.get_pending_tasks():
+            if task.type != TaskType.SEARCH:
+                continue
+            coverage_waypoints = self._task_coverage_waypoints(task)
+            useful_waypoints = [
+                waypoint
+                for waypoint in coverage_waypoints
+                if self._point_adds_unreserved_search_coverage(
+                    waypoint,
+                    int(self.config["uav"]["sensor_radius_cells"]),
+                    coverage_threshold,
+                    reserved,
+                )
+            ]
+            useful_waypoints = self._filter_post_goal_waypoints(
+                task,
+                useful_waypoints,
+                int(self.config["uav"]["sensor_radius_cells"]),
+                coverage_threshold,
+            )
+            if len(useful_waypoints) == len(coverage_waypoints):
+                continue
+            if useful_waypoints:
+                self._set_task_coverage_waypoints(task, useful_waypoints, now)
+            else:
+                self.task_manager.complete_task(task.id, now=now)
+
+    def _get_active_search_footprint(self) -> set[Position]:
+        reserved: set[Position] = set()
+        for task in self.task_manager.get_active_tasks():
+            if task.type != TaskType.SEARCH or task.assigned_uav_id is None:
+                continue
+            uav = self.fleet.get_uav(task.assigned_uav_id).state
+            if uav.status != UAVStatus.SEARCHING or not uav.path:
+                continue
+            reserved.update(self._path_coverage_footprint(uav.path[uav.path_index :], uav.sensor_radius_cells))
+        return reserved
+
+    def _point_adds_search_coverage(self, point: Position, radius_cells: int, coverage_threshold: float) -> bool:
+        radius_sq = radius_cells * radius_cells
+        for y in range(point.y - radius_cells, point.y + radius_cells + 1):
+            for x in range(point.x - radius_cells, point.x + radius_cells + 1):
+                pos = Position(x, y)
+                if not self.grid_map.is_passable(pos):
+                    continue
+                if (x - point.x) ** 2 + (y - point.y) ** 2 > radius_sq:
+                    continue
+                if self.grid_map.get_cell(pos).search_confidence < coverage_threshold:
+                    return True
+        return False
+
+    def _point_adds_unreserved_search_coverage(
+        self,
+        point: Position,
+        radius_cells: int,
+        coverage_threshold: float,
+        reserved: set[Position],
+    ) -> bool:
+        radius_sq = radius_cells * radius_cells
+        for y in range(point.y - radius_cells, point.y + radius_cells + 1):
+            for x in range(point.x - radius_cells, point.x + radius_cells + 1):
+                pos = Position(x, y)
+                if pos in reserved or not self.grid_map.is_passable(pos):
+                    continue
+                if (x - point.x) ** 2 + (y - point.y) ** 2 > radius_sq:
+                    continue
+                if self.grid_map.get_cell(pos).search_confidence < coverage_threshold:
+                    return True
+        return False
+
+    def _filter_post_goal_waypoints(
+        self,
+        task: Task,
+        waypoints: list[Position],
+        radius_cells: int,
+        coverage_threshold: float,
+    ) -> list[Position]:
+        if not self._coverage_goal_reached() or task.type != TaskType.SEARCH:
+            return waypoints
+        valuable_cells = self._valuable_remaining_cells_after_goal(task, coverage_threshold)
+        if not valuable_cells:
+            return []
+        return [
+            waypoint
+            for waypoint in waypoints
+            if self._point_intersects_cells(waypoint, radius_cells, valuable_cells)
+        ]
+
+    def _valuable_remaining_cells_after_goal(self, task: Task, coverage_threshold: float) -> set[Position]:
+        remaining = {
+            cell
+            for cell in task.target_cells
+            if self.grid_map.is_passable(cell)
+            and self.grid_map.get_cell(cell).search_confidence < coverage_threshold
+        }
+        if not remaining:
+            return set()
+        valuable: set[Position] = set()
+        ordinary_min = self._post_goal_ordinary_min_cells()
+        for component in connected_components(remaining, self.grid_map):
+            has_priority = any(self.grid_map.get_cell(cell).search_priority > 1.0 for cell in component)
+            if has_priority or len(component) >= ordinary_min:
+                valuable.update(component)
+        return valuable
+
+    def _point_intersects_cells(self, point: Position, radius_cells: int, cells: set[Position]) -> bool:
+        radius_sq = radius_cells * radius_cells
+        for cell in cells:
+            if abs(cell.x - point.x) > radius_cells or abs(cell.y - point.y) > radius_cells:
+                continue
+            if (cell.x - point.x) ** 2 + (cell.y - point.y) ** 2 <= radius_sq:
+                return True
+        return False
 
     def _dispatch_completed_search_returns(self, now: float) -> list[DecisionCommand]:
         if not bool(self.config["search"].get("allow_early_return", True)):
@@ -732,19 +958,31 @@ class Scheduler:
         if not updates and "operation" in event.data:
             updates = [event.data]
         self.map_updater.apply_updates(updates)
+        changed_tasks = self._clean_impassable_search_tasks(event.timestamp)
+        changed_tasks.update(self._split_active_search_tasks_after_map_update(event.timestamp))
 
         commands: list[DecisionCommand] = []
         for state in self.fleet.get_all_states():
             if state.status == UAVStatus.OFFLINE or not state.path:
                 continue
-            # 检查剩余路径是否仍然有效
-            if self.planner.is_path_valid(state.path[state.path_index :], self.grid_map):
+            task = self.task_manager.tasks.get(state.current_task_id or "")
+            path_valid = self.planner.is_path_valid(state.path[state.path_index :], self.grid_map)
+            if path_valid and state.current_task_id not in changed_tasks:
                 continue
 
-            # 路径失效，重新规划
-            goal = state.path[-1]
-            plan = self.planner.plan_path(state, goal, self.grid_map, task_id=state.current_task_id)
-            if not plan.valid:
+            if task is not None and task.type == TaskType.SEARCH:
+                waypoints = self._task_coverage_waypoints(task)
+                if not waypoints:
+                    self.task_manager.complete_task(task.id, now=event.timestamp)
+                    continue
+                route = self._plan_route_through_waypoints(state, waypoints)
+                goal = waypoints[-1]
+            else:
+                goal = state.path[-1]
+                plan = self.planner.plan_path(state, goal, self.grid_map, task_id=state.current_task_id)
+                route = plan.path if plan.valid else []
+
+            if not route:
                 commands.append(
                     DecisionCommand(
                         uav_id=state.id,
@@ -756,18 +994,108 @@ class Scheduler:
                     )
                 )
                 continue
-            self.fleet.assign_path(state.id, plan.path, status=state.status)
+            self.fleet.assign_path(state.id, route, status=state.status)
+            self.replan_count += 1
+            if task is not None:
+                task.replan_count += 1
+                task.last_replan_time = event.timestamp
             commands.append(
                 DecisionCommand(
                     uav_id=state.id,
                     command=CommandType.REPLAN,
                     task_id=state.current_task_id,
                     target=goal,
-                    path=plan.path,
+                    path=route,
                     reason="map_update",
                 )
             )
         return commands
+
+    def _clean_impassable_search_tasks(self, now: float) -> set[str]:
+        changed: set[str] = set()
+        for task in self.task_manager.tasks.values():
+            if task.type != TaskType.SEARCH or task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
+                continue
+            target_cells = {cell for cell in task.target_cells if self.grid_map.is_passable(cell)}
+            coverage_waypoints = [point for point in self._task_coverage_waypoints(task) if self.grid_map.is_passable(point)]
+            if target_cells != task.target_cells or len(coverage_waypoints) != len(task.coverage_waypoints or task.waypoints):
+                changed.add(task.id)
+            task.target_cells = target_cells
+            self._set_task_coverage_waypoints(task, coverage_waypoints, now)
+            if not task.target_cells or not task.coverage_waypoints:
+                self.task_manager.complete_task(task.id, now=now)
+        return changed
+
+    def _split_active_search_tasks_after_map_update(self, now: float) -> set[str]:
+        changed: set[str] = set()
+        new_tasks: list[Task] = []
+        coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
+        for task in list(self.task_manager.get_active_tasks()):
+            if task.type != TaskType.SEARCH or task.assigned_uav_id is None:
+                continue
+            uav = self.fleet.get_uav(task.assigned_uav_id).state
+            remaining_cells = {
+                cell
+                for cell in task.target_cells
+                if self.grid_map.is_passable(cell)
+                and self.grid_map.get_cell(cell).search_confidence < coverage_threshold
+            }
+            components = connected_components(remaining_cells, self.grid_map)
+            if len(components) <= 1:
+                continue
+
+            keep = min(
+                components,
+                key=lambda component: min(abs(cell.x - uav.position.x) + abs(cell.y - uav.position.y) for cell in component),
+            )
+            task.target_cells = set(keep)
+            kept_waypoints = [point for point in self._task_coverage_waypoints(task) if point in keep]
+            if not kept_waypoints:
+                kept_waypoints = generate_boustrophedon_path(keep, uav.sensor_radius_cells)
+                kept_waypoints = reorder_waypoints_for_uav(kept_waypoints, uav.position)
+            self._set_task_coverage_waypoints(task, kept_waypoints, now)
+            changed.add(task.id)
+
+            for component in components:
+                if component == keep:
+                    continue
+                supplemental = self._build_search_task_from_region(component, uav.position, now, "map_update")
+                if supplemental is not None:
+                    new_tasks.append(supplemental)
+
+        if new_tasks:
+            self.task_manager.add_tasks(new_tasks)
+        return changed
+
+    def _build_search_task_from_region(
+        self,
+        region: set[Position],
+        origin: Position,
+        now: float,
+        prefix: str,
+    ) -> Task | None:
+        waypoints = generate_boustrophedon_path(region, int(self.config["uav"]["sensor_radius_cells"]))
+        if not waypoints:
+            return None
+        waypoints = reorder_waypoints_for_uav(waypoints, origin)
+        self._supplemental_task_seq += 1
+        uncovered_value, priority_value = self._weighted_region_value(region)
+        estimated_cost_m = estimate_task_cost(waypoints, waypoints[0], self.grid_map.resolution_m)
+        return Task(
+            id=f"{prefix}_{self._supplemental_task_seq:03d}",
+            type=TaskType.SEARCH,
+            priority=max(self.grid_map.get_cell(cell).search_priority for cell in region),
+            target_cells=set(region),
+            entry_point=waypoints[0],
+            waypoints=waypoints,
+            coverage_waypoints=list(waypoints),
+            estimated_cost_m=estimated_cost_m,
+            created_at=now,
+            updated_at=now,
+            uncovered_value=uncovered_value,
+            priority_value=priority_value,
+            score=(uncovered_value + priority_value) / max(estimated_cost_m, 1.0),
+        )
 
     def _handle_target_found(self, event: Event) -> list[DecisionCommand]:
         """处理目标发现事件
