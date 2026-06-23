@@ -1,4 +1,4 @@
-from uav_search.core.data_types import Position, UAVState, UAVStatus
+from uav_search.core.data_types import CommandType, Position, UAVState, UAVStatus
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
 
 
@@ -39,4 +39,9 @@ def test_resolve_conflicts_inserts_wait_for_lower_priority_uav() -> None:
 
     assert commands
     assert commands[0].uav_id == "uav_02"
-    assert len(low_priority.path) > 3
+    assert len(low_priority.path) == 3
+    assert commands[0].command == CommandType.CONFLICT_YIELD
+    assert commands[0].path == []
+    assert commands[0].metadata["effect"] == "none"
+    assert commands[0].metadata["advisory"] is True
+    assert len(commands[0].metadata["suggested_path"]) > 3

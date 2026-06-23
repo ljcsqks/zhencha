@@ -1,5 +1,5 @@
 from uav_search.core.config import load_config
-from uav_search.core.data_types import CellType, Event, EventPriority, EventType, Position, UAVStatus
+from uav_search.core.data_types import CellType, Position, UAVStatus
 from uav_search.core.scheduler import Scheduler
 from uav_search.maps.map_loader import build_grid_map
 from uav_search.simulation.scenario_events import ScenarioEventInjector
@@ -14,7 +14,6 @@ def test_simulator_injects_due_scenario_events() -> None:
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    scheduler.regular_cycle(now=0.0)
     injector = ScenarioEventInjector(
         [
             {
@@ -39,16 +38,31 @@ def test_snapshots_include_commands_and_task_summary() -> None:
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    decision = scheduler.regular_cycle(now=0.0)
     simulator = Simulator(grid_map, fleet, config)
 
-    simulator.record_snapshot(scheduler=scheduler, commands=decision.commands)
+    simulator.run_initial_decision(scheduler)
 
     snapshot = simulator.snapshots[-1]
     assert snapshot["commands"]
     assert {"command", "uav_id", "task_id", "target", "path", "reason"}.issubset(snapshot["commands"][0])
     assert snapshot["tasks"]["status_counts"]["in_progress"] >= 1
     assert "confirmations" in snapshot["tasks"]
+
+
+def test_simulator_snapshots_include_command_acks_from_applier() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["simulation"]["max_steps"] = 1
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    simulator = Simulator(grid_map, fleet, config)
+
+    simulator.run(max_steps=1, scheduler=scheduler)
+
+    assert simulator.snapshots[-1]["command_acks"]
+    assert {"command_id", "uav_id", "status", "issued_at", "updated_at"}.issubset(
+        simulator.snapshots[-1]["command_acks"][0]
+    )
 
 
 def test_simulator_completes_target_confirmation() -> None:
@@ -58,24 +72,25 @@ def test_simulator_completes_target_confirmation() -> None:
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    scheduler.event_manager.emit(
-        Event(
-            id="target_found_at_home",
-            type=EventType.TARGET_FOUND,
-            timestamp=0.0,
-            priority=EventPriority.CRITICAL,
-            source_uav_id="uav_01",
-            data={
-                "target_id": "target_home",
-                "position": {"x": 0, "y": 0},
-                "confidence": 0.9,
-                "target_type": "person",
-            },
-        )
+    injector = ScenarioEventInjector(
+        [
+            {
+                "id": "target_found_at_home",
+                "time_s": 0.0,
+                "type": "TARGET_FOUND",
+                "source_uav_id": "uav_01",
+                "data": {
+                    "target_id": "target_home",
+                    "position": {"x": 0, "y": 0},
+                    "confidence": 0.9,
+                    "target_type": "person",
+                },
+            }
+        ]
     )
     simulator = Simulator(grid_map, fleet, config)
 
-    simulator.run(scheduler=scheduler)
+    simulator.run(scheduler=scheduler, event_injector=injector)
 
     assert fleet.get_uav("uav_01").state.status != UAVStatus.CONFIRMING
     assert any("confirm_done_confirm_target_home" in snapshot["events"] for snapshot in simulator.snapshots)
@@ -89,7 +104,6 @@ def test_simulator_resumes_search_after_confirmation_and_reaches_coverage_goal()
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    scheduler.regular_cycle(now=0.0)
     injector = ScenarioEventInjector(
         [
             {
@@ -142,7 +156,6 @@ def test_simulator_extends_when_search_is_not_finished() -> None:
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    scheduler.regular_cycle(now=0.0)
     simulator = Simulator(grid_map, fleet, config)
 
     simulator.run(max_steps=1, scheduler=scheduler)

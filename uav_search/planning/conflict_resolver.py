@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from uav_search.core.data_types import Conflict, DecisionCommand, EventPriority, Position, UAVState, UAVStatus
 from uav_search.core.data_types import CommandType
@@ -59,7 +60,7 @@ def resolve_conflicts(
     replanning around temporary path reservations and gives us deterministic,
     easy-to-test behavior. Later stages can add path-offset replanning here.
     """
-    states_by_id = {state.id: state for state in uav_states}
+    states_by_id = {state.id: replace(state, path=list(state.path)) for state in uav_states}
     commands: list[DecisionCommand] = []
 
     for _ in range(max_iterations):
@@ -79,11 +80,17 @@ def resolve_conflicts(
         commands.append(
             DecisionCommand(
                 uav_id=waiting_state.id,
-                command=CommandType.HOLD,
+                command=CommandType.CONFLICT_YIELD,
                 task_id=waiting_state.current_task_id,
                 target=waiting_state.path[-1] if waiting_state.path else None,
-                path=waiting_state.path,
+                path=[],
                 reason="conflict_time_offset",
+                metadata={
+                    "effect": "none",
+                    "advisory": True,
+                    "suggested_effect": "path_time_offset",
+                    "suggested_path": [{"x": point.x, "y": point.y} for point in waiting_state.path],
+                },
             )
         )
 

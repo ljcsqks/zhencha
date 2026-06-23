@@ -17,9 +17,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from uav_search.core.data_types import DecisionCommand, UAVStatus
+from uav_search.core.contracts import CommandAck, ControlCommand
+from uav_search.core.data_types import DecisionCommand, Event, EventType, Position, UAVStatus
 from uav_search.core.scheduler import Scheduler
+from uav_search.core.scheduler_adapter import SchedulerAlgorithmAdapter
 from uav_search.maps.grid_map import GridMap
+from uav_search.maps.map_updater import MapUpdater
+from uav_search.simulation.command_applier import CommandApplier
+from uav_search.simulation.observation_builder import ObservationBuilder
 from uav_search.simulation.scenario_events import ScenarioEventInjector
 from uav_search.uav.fleet_manager import FleetManager
 
@@ -57,9 +62,36 @@ class Simulator:
         self.time_s = 0.0  # 仿真时间从0开始
         self.snapshots: list[dict[str, Any]] = []  # 存储所有时间步的快照
         self._last_events: list[str] = []  # 追踪最近处理的事件
-        self._last_commands: list[DecisionCommand] = []
+        self._last_commands: list[DecisionCommand | ControlCommand] = []
+        self._last_command_acks: list[CommandAck] = []
+        self._tick = 0
+        self.observation_builder = ObservationBuilder(grid_map, fleet, config)
+        self.command_applier = CommandApplier(fleet, grid_map)
+        self._scheduler_adapter: SchedulerAlgorithmAdapter | None = None
+        self._pending_events: list[Event] = []
+        self._current_events: list[Event] = []
+        self._last_changed_cells: list[Position] = []
+        self.map_updater = MapUpdater(grid_map)
 
-    def step(self, scheduler: Scheduler | None = None) -> None:
+    def enqueue_event(self, event: Event) -> None:
+        self._pending_events.append(event)
+
+    def run_initial_decision(self, scheduler: Scheduler) -> None:
+        self._last_events = []
+        self._last_commands = []
+        self._last_command_acks = []
+        self._prepare_external_events()
+        algorithm = self._adapter_for(scheduler)
+        decision = algorithm.decide(self._build_observation())
+        self._last_events = list(decision.debug.get("events_handled", [])) or [event.id for event in self._current_events]
+        self._last_commands = list(decision.commands)
+        self._last_command_acks = self.command_applier.apply(decision.commands, now=self.time_s)
+        self.record_snapshot(scheduler=scheduler, commands=decision.commands)
+        self._current_events = []
+        self._last_changed_cells = []
+        self._tick += 1
+
+    def step(self, scheduler: Scheduler | None = None, algorithm: SchedulerAlgorithmAdapter | None = None) -> None:
         """执行一个仿真时间步
 
         这是仿真的核心步骤，执行：
@@ -99,16 +131,22 @@ class Simulator:
         # 决策后处理
         # 检查是否有需要更新状态的任务（如目标确认完成）
         if scheduler is not None:
-            commands, handled_ids = scheduler.update_after_step(self.time_s)
-            self._last_commands.extend(commands)
-            self._last_events.extend(handled_ids)
+            algorithm = algorithm or self._adapter_for(scheduler)
+            post_step_output = algorithm.update_after_step(self.time_s)
+            self._last_commands.extend(post_step_output.commands)
+            self._last_events.extend(post_step_output.debug.get("events_handled", []))
+            self._last_command_acks.extend(self.command_applier.apply(post_step_output.commands, now=self.time_s))
             if scheduler.should_run_regular_cycle():
-                decision = scheduler.regular_cycle(now=self.time_s)
+                decision = algorithm.decide(self._build_observation())
                 self._last_commands.extend(decision.commands)
-                self._last_events.extend(decision.events_handled)
+                self._last_events.extend(decision.debug.get("events_handled", []))
+                self._last_command_acks.extend(self.command_applier.apply(decision.commands, now=self.time_s))
+
+        self._last_command_acks.extend(self.command_applier.refresh(self.time_s))
 
         # 记录当前时间步的快照
         self.record_snapshot(scheduler=scheduler)
+        self._tick += 1
 
     def run(
         self,
@@ -161,23 +199,31 @@ class Simulator:
                     return_grace_used += 1
             self._last_events = []
             self._last_commands = []
+            self._last_command_acks = []
 
             # 决策循环（如果提供了调度器）
             if scheduler is not None:
+                algorithm = self._adapter_for(scheduler)
                 # 步骤1: 注入场景事件
                 # 按时间将预设事件注入到事件管理器
                 if event_injector is not None:
-                    event_injector.emit_due(self.time_s, scheduler)
+                    for event in event_injector.emit_due(self.time_s):
+                        self.enqueue_event(event)
+                self._prepare_external_events()
 
                 # 步骤2: 执行决策循环
                 # 如果有待处理事件，执行完整的决策流程
-                if scheduler.should_run_regular_cycle():
-                    decision = scheduler.regular_cycle(now=self.time_s)
-                    self._last_events = decision.events_handled
+                if self._current_events or scheduler.should_run_regular_cycle():
+                    decision = algorithm.decide(self._build_observation())
+                    self._last_events = list(decision.debug.get("events_handled", [])) or [
+                        event.id for event in self._current_events
+                    ]
                     self._last_commands = list(decision.commands)
+                    self._last_command_acks = self.command_applier.apply(decision.commands, now=self.time_s)
+                self._current_events = []
 
             # 步骤3: 推进仿真一个时间步
-            self.step(scheduler=scheduler)
+            self.step(scheduler=scheduler, algorithm=self._scheduler_adapter)
 
             # 步骤4: 检查终止条件
             # 如果所有无人机都空闲或离线，提前结束
@@ -194,10 +240,73 @@ class Simulator:
             return False
         return any(state.status == UAVStatus.RETURNING for state in self.fleet.get_all_states())
 
+    def _prepare_external_events(self) -> None:
+        self._current_events = list(self._pending_events)
+        self._pending_events = []
+        self._last_changed_cells = []
+        for event in self._current_events:
+            self._last_changed_cells.extend(self._apply_physical_event(event))
+
+    def _apply_physical_event(self, event: Event) -> list[Position]:
+        if event.type == EventType.MAP_UPDATE:
+            updates = event.data.get("updates", [])
+            if not updates and "operation" in event.data:
+                updates = [event.data]
+            changed = self.map_updater.apply_updates(updates)
+            event.data["_applied_by_simulator"] = True
+            event.data["changed_cells"] = [{"x": cell.x, "y": cell.y} for cell in changed]
+            return changed
+        if event.type == EventType.UAV_OFFLINE:
+            uav_id = event.source_uav_id or event.data.get("uav_id")
+            if uav_id is not None:
+                state = self.fleet.get_uav(str(uav_id)).state
+                state.status = UAVStatus.OFFLINE
+                state.available = False
+                state.path = []
+                state.path_index = 0
+            return []
+        if event.type == EventType.UAV_RECOVERED:
+            uav_id = event.source_uav_id or event.data.get("uav_id")
+            if uav_id is not None:
+                state = self.fleet.get_uav(str(uav_id)).state
+                state.status = UAVStatus.IDLE
+                state.available = True
+            return []
+        return []
+
+    def apply_commands(
+        self,
+        commands: list[DecisionCommand | ControlCommand],
+        now: float | None = None,
+    ) -> list[CommandAck]:
+        applied_at = self.time_s if now is None else now
+        control_commands = [
+            command if isinstance(command, ControlCommand) else ControlCommand.from_decision(command, issued_at=applied_at)
+            for command in commands
+        ]
+        acks = self.command_applier.apply(control_commands, now=applied_at)
+        self._last_command_acks.extend(acks)
+        return acks
+
+    def _adapter_for(self, scheduler: Scheduler) -> SchedulerAlgorithmAdapter:
+        if self._scheduler_adapter is None or self._scheduler_adapter.scheduler is not scheduler:
+            self._scheduler_adapter = SchedulerAlgorithmAdapter(scheduler)
+        return self._scheduler_adapter
+
+    def _build_observation(self):
+        return self.observation_builder.build(
+            tick=self._tick,
+            time_s=self.time_s,
+            changed_cells=self._last_changed_cells,
+            events=self._current_events,
+            command_acks=self.command_applier.recent_acks(self.time_s),
+            active_command_ids=self.command_applier.active_command_ids,
+        )
+
     def record_snapshot(
         self,
         scheduler: Scheduler | None = None,
-        commands: list[DecisionCommand] | None = None,
+        commands: list[DecisionCommand | ControlCommand] | None = None,
     ) -> None:
         """记录当前时间步的快照
 
@@ -222,6 +331,8 @@ class Simulator:
                     _command_to_snapshot(command)
                     for command in (commands if commands is not None else self._last_commands)
                 ],
+                "command_acks": [_ack_to_snapshot(ack) for ack in self._last_command_acks],
+                "changed_cells": [asdict(cell) for cell in self._last_changed_cells],
                 "uavs": [
                     {
                         "id": state.id,
@@ -269,12 +380,28 @@ class Simulator:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
 
 
-def _command_to_snapshot(command: DecisionCommand) -> dict[str, Any]:
+def _command_to_snapshot(command: DecisionCommand | ControlCommand) -> dict[str, Any]:
     return {
+        "command_id": command.command_id,
         "command": command.command.value,
         "uav_id": command.uav_id,
         "task_id": command.task_id,
         "target": asdict(command.target) if command.target is not None else None,
         "path": [asdict(point) for point in command.path],
         "reason": command.reason,
+        "issued_at": command.issued_at,
+        "ttl_s": command.ttl_s,
+        "metadata": dict(command.metadata),
+    }
+
+
+def _ack_to_snapshot(ack: CommandAck) -> dict[str, Any]:
+    return {
+        "command_id": ack.command_id,
+        "uav_id": ack.uav_id,
+        "status": ack.status.value,
+        "issued_at": ack.issued_at,
+        "updated_at": ack.updated_at,
+        "reason": ack.reason,
+        "progress": ack.progress,
     }

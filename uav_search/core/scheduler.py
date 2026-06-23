@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 
+from uav_search.core.contracts import AckStatus, CommandAck, ControlCommand
 from uav_search.allocation.auction import SequentialAuction
 from uav_search.core.data_types import CommandType, DecisionCommand, DecisionOutput, Event, EventPriority, EventType, Position
 from uav_search.core.data_types import Task
@@ -104,6 +105,8 @@ class Scheduler:
         self._confirmations: dict[str, dict[str, Any]] = {}  # 追踪目标确认任务状态
         self._confirmed_targets: set[str] = set()
         self._target_metrics: dict[str, dict[str, Any]] = {}
+        self._issued_commands: dict[str, ControlCommand] = {}
+        self._handled_command_ack_keys: set[tuple[str, str, float]] = set()
         self._initialized = False  # 标记是否已生成初始任务
         self._supplemental_task_seq = 0
         self.replan_count = 0
@@ -134,6 +137,70 @@ class Scheduler:
             for task_id, record in sorted(self._confirmations.items())
         ]
         return {"status_counts": status_counts, "confirmations": confirmations}
+
+    def remember_control_commands(self, commands: list[ControlCommand]) -> None:
+        for command in commands:
+            self._issued_commands[command.command_id] = command
+
+    def handle_command_acks(self, command_acks: list[CommandAck]) -> None:
+        for ack in command_acks:
+            key = (ack.command_id, ack.status.value, ack.updated_at)
+            if key in self._handled_command_ack_keys:
+                continue
+            self._handled_command_ack_keys.add(key)
+            command = self._issued_commands.get(ack.command_id)
+            if command is None:
+                continue
+            if ack.status in (AckStatus.REJECTED, AckStatus.FAILED, AckStatus.CANCELLED):
+                self._handle_command_not_executed(command, ack)
+            elif ack.status == AckStatus.COMPLETED:
+                self._handle_command_completed(command, ack)
+
+    def _handle_command_not_executed(self, command: ControlCommand, ack: CommandAck) -> None:
+        if command.command == CommandType.CONFIRM_TARGET:
+            self._fail_confirmation_from_ack(command, ack)
+            return
+        if command.task_id is None or command.task_id not in self.task_manager.tasks:
+            return
+        task = self.task_manager.tasks[command.task_id]
+        if task.type == TaskType.SEARCH and task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            task.assigned_uav_id = None
+            task.status = TaskStatus.PENDING
+            task.updated_at = ack.updated_at
+        elif task.status == TaskStatus.ASSIGNED:
+            self.task_manager.mark_blocked(task.id, now=ack.updated_at)
+
+    def _handle_command_completed(self, command: ControlCommand, ack: CommandAck) -> None:
+        if command.command == CommandType.RETURN_HOME:
+            return
+        if command.task_id is None or command.task_id not in self.task_manager.tasks:
+            return
+        task = self.task_manager.tasks[command.task_id]
+        if task.type == TaskType.SEARCH and task.status == TaskStatus.ASSIGNED:
+            self.task_manager.start_task(task.id, now=ack.updated_at)
+
+    def _fail_confirmation_from_ack(self, command: ControlCommand, ack: CommandAck) -> None:
+        confirmation = self._confirmations.pop(command.task_id or "", None)
+        target_id = str(
+            (confirmation or {}).get("target_id")
+            or (command.metadata or {}).get("target_id")
+            or (command.task_id or "").removeprefix("confirm_")
+        )
+        if target_id:
+            record = self._target_metrics.setdefault(target_id, {"target_id": target_id, "found_time_s": ack.updated_at})
+            record.update(
+                {
+                    "failed_time_s": ack.updated_at,
+                    "success": False,
+                    "failure_reason": ack.reason or ack.status.value,
+                }
+            )
+        interrupted_task_id = (confirmation or {}).get("interrupted_task_id")
+        if interrupted_task_id in self.task_manager.tasks:
+            task = self.task_manager.tasks[interrupted_task_id]
+            if task.status == TaskStatus.IN_PROGRESS:
+                task.status = TaskStatus.PENDING
+                task.assigned_uav_id = None
 
     def regular_cycle(self, now: float = 0.0) -> DecisionOutput:
         """执行一次完整的决策周期
@@ -166,14 +233,23 @@ class Scheduler:
 
         # 步骤2: 确保初始任务已生成（仅首次执行）
         self._ensure_initial_tasks(now)
-        self._refresh_task_progress(now)
+        commands.extend(self._refresh_task_progress(now))
         self._ensure_supplemental_search_tasks(now)
 
         # 步骤3: 执行任务分配
         assignments = []
+        reserved_uav_ids = {
+            command.uav_id
+            for command in commands
+            if command.command in (CommandType.CONFIRM_TARGET, CommandType.RETURN_HOME, CommandType.HOLD)
+        }
+        available_uavs = [
+            state for state in self.fleet.get_available_uavs()
+            if state.id not in reserved_uav_ids
+        ]
         proposed_assignments = self.auction.allocate(
-            self.task_manager.get_pending_tasks(),
-            self.fleet.get_available_uavs(),
+            self._allocatable_pending_tasks(),
+            available_uavs,
             self.grid_map,
             now=now,
         )
@@ -209,8 +285,6 @@ class Scheduler:
 
             # 路径规划成功，更新任务和无人机状态
             self.task_manager.start_task(task.id, now=now)
-            uav_state.current_task_id = task.id
-            self.fleet.assign_path(uav_state.id, route, status=UAVStatus.SEARCHING)
             assignments.append(assignment)
             commands.append(
                 DecisionCommand(
@@ -225,8 +299,9 @@ class Scheduler:
 
         # 步骤5: 检测并消解冲突
         # 冲突检测：检查所有无人机路径是否存在碰撞风险
+        planning_states = self._states_with_pending_commands(commands)
         conflicts = detect_conflicts(
-            self.fleet.get_all_states(),
+            planning_states,
             safety_distance_cells=float(self.config["planning"]["safety_distance_cells"]),
             time_horizon_steps=int(self.config["planning"]["conflict_time_horizon_steps"]),
         )
@@ -234,7 +309,7 @@ class Scheduler:
         commands.extend(
             resolve_conflicts(
                 conflicts,
-                self.fleet.get_all_states(),
+                planning_states,
                 safety_distance_cells=float(self.config["planning"]["safety_distance_cells"]),
             )
         )
@@ -378,20 +453,101 @@ class Scheduler:
         self.task_manager.add_tasks(tasks)
         self._initialized = True
 
-    def _refresh_task_progress(self, now: float) -> None:
+    def _refresh_task_progress(self, now: float) -> list[DecisionCommand]:
         coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         self.task_manager.update_progress(self.grid_map, now=now, coverage_threshold=coverage_threshold)
         self.task_manager.refresh_pending_waypoints(self.grid_map, now=now, coverage_threshold=coverage_threshold)
         self._trim_pending_search_waypoints_against_reserved(now, coverage_threshold)
-        self._trim_redundant_active_search_paths(now, coverage_threshold)
+        commands = self._stop_search_tasks_after_coverage_goal(now)
+        commands.extend(self._trim_redundant_active_search_paths(now, coverage_threshold))
         self._complete_finished_search_tasks(now)
+        return commands
+
+    def _stop_search_tasks_after_coverage_goal(self, now: float) -> list[DecisionCommand]:
+        if not self._coverage_goal_reached():
+            return []
+        commands: list[DecisionCommand] = []
+        commanded_uavs: set[str] = set()
+        for task in list(self.task_manager.tasks.values()):
+            if task.type != TaskType.SEARCH or task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
+                continue
+            uav: UAVState | None = None
+            if task.assigned_uav_id is not None:
+                uav = self.fleet.get_uav(task.assigned_uav_id).state
+            self.task_manager.complete_task(task.id, now=now)
+            if uav is None or uav.status != UAVStatus.SEARCHING:
+                continue
+            commanded_uavs.add(uav.id)
+            commands.append(
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.HOLD,
+                    task_id=task.id,
+                    target=uav.position,
+                    path=[],
+                    reason="mission_coverage_goal_met",
+                )
+            )
+        for uav in self.fleet.get_all_states():
+            if uav.id in commanded_uavs or uav.status != UAVStatus.SEARCHING:
+                continue
+            commands.append(
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.HOLD,
+                    task_id=uav.current_task_id,
+                    target=uav.position,
+                    path=[],
+                    reason="mission_coverage_goal_met",
+                )
+            )
+        return commands
 
     def should_run_regular_cycle(self) -> bool:
         return self.event_manager.has_events() or (
-            bool(self.task_manager.get_pending_tasks()) and bool(self.fleet.get_available_uavs())
+            bool(self._allocatable_pending_tasks()) and bool(self.fleet.get_available_uavs())
         ) or (
             bool(self.fleet.get_available_uavs()) and bool(self._get_supplemental_candidates())
+        ) or (
+            self._coverage_goal_reached() and self._has_active_search_uavs()
         )
+
+    def _has_active_search_uavs(self) -> bool:
+        return any(state.status == UAVStatus.SEARCHING for state in self.fleet.get_all_states())
+
+    def _allocatable_pending_tasks(self) -> list[Task]:
+        tasks: list[Task] = []
+        states_by_id = {state.id: state for state in self.fleet.get_all_states()}
+        for task in self.task_manager.get_pending_tasks():
+            if task.resume_owner_id is None:
+                tasks.append(task)
+                continue
+            owner = states_by_id.get(task.resume_owner_id)
+            if owner is not None and owner.available and owner.status == UAVStatus.IDLE:
+                tasks.append(task)
+        return tasks
+
+    def _states_with_pending_commands(self, commands: list[DecisionCommand]) -> list[UAVState]:
+        states = {state.id: replace(state, path=list(state.path)) for state in self.fleet.get_all_states()}
+        for command in commands:
+            if command.uav_id not in states or not command.path:
+                continue
+            if command.command == CommandType.FOLLOW_PATH:
+                status = UAVStatus.SEARCHING
+            elif command.command == CommandType.CONFIRM_TARGET:
+                status = UAVStatus.CONFIRMING
+            elif command.command == CommandType.RETURN_HOME:
+                status = UAVStatus.RETURNING
+            elif command.command == CommandType.REPLAN:
+                status = UAVStatus(str(command.metadata.get("status", states[command.uav_id].status.value)))
+            elif command.command == CommandType.CONFLICT_YIELD:
+                status = states[command.uav_id].status
+            else:
+                continue
+            states[command.uav_id].path = list(command.path)
+            states[command.uav_id].path_index = 0
+            states[command.uav_id].status = status
+        return list(states.values())
 
     def _complete_finished_search_tasks(self, now: float) -> None:
         for task in self.task_manager.get_active_tasks():
@@ -626,7 +782,8 @@ class Scheduler:
         now: float,
         coverage_threshold: float,
         force_replan: bool = False,
-    ) -> None:
+    ) -> list[DecisionCommand]:
+        commands: list[DecisionCommand] = []
         for task in self.task_manager.get_active_tasks():
             if task.type != TaskType.SEARCH or task.assigned_uav_id is None:
                 continue
@@ -645,11 +802,17 @@ class Scheduler:
                 continue
 
             if not useful_waypoints:
-                uav.path = [uav.position]
-                uav.path_index = 0
-                uav.status = UAVStatus.IDLE
-                uav.available = True
                 self.task_manager.complete_task(task.id, now=now)
+                commands.append(
+                    DecisionCommand(
+                        uav_id=uav.id,
+                        command=CommandType.HOLD,
+                        task_id=task.id,
+                        target=uav.position,
+                        path=[],
+                        reason="search_task_no_remaining_coverage",
+                    )
+                )
                 continue
 
             self._set_task_coverage_waypoints(task, useful_waypoints, now)
@@ -659,10 +822,10 @@ class Scheduler:
             if not route:
                 self.task_manager.mark_blocked(task.id, now=now)
                 continue
-            self.fleet.assign_path(uav.id, route, status=UAVStatus.SEARCHING)
             task.last_replan_time = now
             task.replan_count += 1
             self.replan_count += 1
+        return commands
 
     def _should_replan_active_search(
         self,
@@ -837,7 +1000,6 @@ class Scheduler:
                     )
                 )
                 continue
-            self.fleet.assign_path(uav.id, plan.path, status=UAVStatus.RETURNING)
             commands.append(
                 DecisionCommand(
                     uav_id=uav.id,
@@ -916,8 +1078,6 @@ class Scheduler:
         if event.source_uav_id is None:
             return []
         uav = self.fleet.get_uav(event.source_uav_id).state
-        uav.status = UAVStatus.RETURNING
-        uav.available = False
         plan = self.planner.plan_path(uav, uav.home_position, self.grid_map, task_id=uav.current_task_id)
         if not plan.valid:
             return [
@@ -931,7 +1091,6 @@ class Scheduler:
                 )
             ]
 
-        self.fleet.assign_path(uav.id, plan.path, status=UAVStatus.RETURNING)
         return [
             DecisionCommand(
                 uav_id=uav.id,
@@ -963,9 +1122,6 @@ class Scheduler:
         if event.source_uav_id is None:
             return []
         uav = self.fleet.get_uav(event.source_uav_id).state
-        uav.status = UAVStatus.OFFLINE
-        uav.available = False
-        uav.path = []
         return [
             DecisionCommand(
                 uav_id=uav.id,
@@ -997,7 +1153,8 @@ class Scheduler:
         updates = event.data.get("updates", [])
         if not updates and "operation" in event.data:
             updates = [event.data]
-        self.map_updater.apply_updates(updates)
+        if not event.data.get("_applied_by_simulator"):
+            self.map_updater.apply_updates(updates)
         changed_tasks = self._clean_impassable_search_tasks(event.timestamp)
         changed_tasks.update(self._split_active_search_tasks_after_map_update(event.timestamp))
 
@@ -1034,7 +1191,6 @@ class Scheduler:
                     )
                 )
                 continue
-            self.fleet.assign_path(state.id, route, status=state.status)
             self.replan_count += 1
             if task is not None:
                 task.replan_count += 1
@@ -1047,6 +1203,7 @@ class Scheduler:
                     target=goal,
                     path=route,
                     reason="map_update",
+                    metadata={"status": state.status.value},
                 )
             )
         return commands
@@ -1169,9 +1326,6 @@ class Scheduler:
         uav = plan.uav
         interrupted_task_id = self._pause_search_for_confirmation(uav, event.timestamp)
         plan.interrupted_task_id = interrupted_task_id
-        uav.current_task_id = confirm_task_id
-        self.fleet.assign_path(uav.id, plan.route, status=UAVStatus.CONFIRMING)
-
         self._confirmations[confirm_task_id] = {
             "uav_id": uav.id,
             "target": target,
@@ -1326,8 +1480,6 @@ class Scheduler:
         if not remaining:
             self.task_manager.complete_task(task.id, now=now)
             return None
-        uav.path = []
-        uav.path_index = 0
         return task.id
 
     def _confirm_interrupt_cost(self, state: UAVState) -> float:
@@ -1376,12 +1528,6 @@ class Scheduler:
         fallback = next((state for state in self.fleet.get_all_states() if state.status != UAVStatus.OFFLINE), None)
         if fallback is None:
             return []
-        if fallback.status == UAVStatus.CONFIRMING:
-            fallback.status = UAVStatus.IDLE
-            fallback.available = True
-            fallback.current_task_id = None
-            fallback.path = []
-            fallback.path_index = 0
         return [
             DecisionCommand(
                 uav_id=fallback.id,
@@ -1431,11 +1577,6 @@ class Scheduler:
         if resume_command is not None:
             return [resume_command]
 
-        uav.status = UAVStatus.IDLE
-        uav.available = True
-        uav.current_task_id = None
-        uav.path = []
-        uav.path_index = 0
         return [
             DecisionCommand(
                 uav_id=uav.id,
@@ -1475,8 +1616,6 @@ class Scheduler:
         self._set_task_coverage_waypoints(task, waypoints, now)
         assignment = self.task_manager.assign_task(task.id, uav.id, now=now, bid_value=0.0)
         self.task_manager.start_task(task.id, now=now)
-        uav.current_task_id = task.id
-        self.fleet.assign_path(uav.id, route, status=UAVStatus.SEARCHING)
         task.resume_owner_id = None
         target_id = str(confirmation.get("target_id", ""))
         if target_id in self._target_metrics:

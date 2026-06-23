@@ -136,6 +136,8 @@ class CommandType(Enum):
     CONFIRM_TARGET = "CONFIRM_TARGET"
     RETURN_HOME = "RETURN_HOME"
     REPLAN = "REPLAN"
+    CANCEL_COMMAND = "CANCEL_COMMAND"
+    CONFLICT_YIELD = "CONFLICT_YIELD"
 
 
 @dataclass(frozen=True, order=True)
@@ -449,6 +451,10 @@ class DecisionCommand:
     target: Position | None
     path: list[Position]
     reason: str | None = None
+    command_id: str | None = None
+    issued_at: float | None = None
+    ttl_s: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -1,4 +1,5 @@
 ﻿from uav_search.core.config import load_config
+from uav_search.core.contracts import ControlCommand
 from uav_search.core.data_types import (
     CellType,
     CommandType,
@@ -13,6 +14,7 @@ from uav_search.core.data_types import (
 )
 from uav_search.core.scheduler import Scheduler
 from uav_search.maps.map_loader import build_grid_map
+from uav_search.simulation.command_applier import CommandApplier
 from uav_search.uav.fleet_manager import FleetManager
 
 
@@ -23,6 +25,7 @@ def test_scheduler_assigns_tasks_and_paths() -> None:
     scheduler = Scheduler(grid_map, fleet, config)
 
     output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
 
     assert output.assignments
     assert any(command.command == CommandType.FOLLOW_PATH for command in output.commands)
@@ -45,6 +48,7 @@ def test_scheduler_handles_low_battery_event() -> None:
     )
 
     output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
 
     assert "low_battery_001" in output.events_handled
     assert any(command.command == CommandType.RETURN_HOME for command in output.commands)
@@ -56,7 +60,8 @@ def test_scheduler_replans_invalid_path_after_map_update() -> None:
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    scheduler.regular_cycle(now=0.0)
+    initial = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, initial.commands, now=0.0)
     state = fleet.get_uav("uav_01").state
     blocked_pos = state.path[1]
 
@@ -102,6 +107,7 @@ def test_scheduler_handles_target_found_event() -> None:
         )
     )
     output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
 
     assert "target_found_001" in output.events_handled
     assert any(command.command == CommandType.CONFIRM_TARGET for command in output.commands)
@@ -131,6 +137,7 @@ def test_target_found_without_source_selects_lowest_cost_uav() -> None:
     )
 
     output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
 
     command = next(command for command in output.commands if command.command == CommandType.CONFIRM_TARGET)
     assert command.uav_id == "uav_02"
@@ -142,7 +149,8 @@ def test_target_found_interrupts_only_one_searching_uav() -> None:
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
-    scheduler.regular_cycle(now=0.0)
+    initial = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, initial.commands, now=0.0)
 
     scheduler.event_manager.emit(
         Event(
@@ -159,7 +167,8 @@ def test_target_found_interrupts_only_one_searching_uav() -> None:
             },
         )
     )
-    scheduler.regular_cycle(now=1.0)
+    target_output = scheduler.regular_cycle(now=1.0)
+    _apply_commands(fleet, grid_map, target_output.commands, now=1.0)
 
     statuses = [state.status for state in fleet.get_all_states()]
     assert statuses.count(UAVStatus.CONFIRMING) == 1
@@ -173,6 +182,7 @@ def test_confirmation_done_resumes_interrupted_search_task() -> None:
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     initial_output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, initial_output.commands, now=0.0)
     interrupted_task_id = initial_output.assignments[0].task_id
 
     scheduler.event_manager.emit(
@@ -190,12 +200,14 @@ def test_confirmation_done_resumes_interrupted_search_task() -> None:
             },
         )
     )
-    scheduler.regular_cycle(now=1.0)
+    target_output = scheduler.regular_cycle(now=1.0)
+    _apply_commands(fleet, grid_map, target_output.commands, now=1.0)
     state = fleet.get_uav("uav_01").state
     state.position = state.path[-1]
     state.path_index = len(state.path) - 1
 
     commands, events = scheduler.update_after_step(now=2.0)
+    _apply_commands(fleet, grid_map, commands, now=2.0)
 
     assert "confirm_done_confirm_target_001" in events
     assert any(command.reason == "resume_interrupted_search" for command in commands)
@@ -357,6 +369,7 @@ def test_target_found_requeues_interrupted_search_task() -> None:
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     initial_output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, initial_output.commands, now=0.0)
     interrupted_task_id = initial_output.assignments[0].task_id
 
     scheduler.event_manager.emit(
@@ -374,7 +387,8 @@ def test_target_found_requeues_interrupted_search_task() -> None:
             },
         )
     )
-    scheduler.regular_cycle(now=1.0)
+    target_output = scheduler.regular_cycle(now=1.0)
+    _apply_commands(fleet, grid_map, target_output.commands, now=1.0)
 
     assert scheduler.task_manager.tasks[interrupted_task_id].status == TaskStatus.PENDING
 
@@ -385,6 +399,7 @@ def test_interrupted_search_task_resumes_with_uncovered_waypoints_only() -> None
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     initial_output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, initial_output.commands, now=0.0)
     interrupted_task_id = initial_output.assignments[0].task_id
     task = scheduler.task_manager.tasks[interrupted_task_id]
     covered_waypoint = task.waypoints[0]
@@ -405,7 +420,8 @@ def test_interrupted_search_task_resumes_with_uncovered_waypoints_only() -> None
             },
         )
     )
-    scheduler.regular_cycle(now=1.0)
+    target_output = scheduler.regular_cycle(now=1.0)
+    _apply_commands(fleet, grid_map, target_output.commands, now=1.0)
 
     resumed_task = scheduler.task_manager.tasks[interrupted_task_id]
     assert resumed_task.status == TaskStatus.PENDING
@@ -433,12 +449,14 @@ def test_scheduler_completes_confirmation_after_dwell_steps() -> None:
             },
         )
     )
-    scheduler.regular_cycle(now=0.0)
+    output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
     state = fleet.get_uav("uav_01").state
     state.position = state.path[-1]
     state.path_index = len(state.path) - 1
 
     first_commands, first_events = scheduler.update_after_step(now=1.0)
+    _apply_commands(fleet, grid_map, first_commands, now=1.0)
 
     assert "confirm_done_confirm_target_001" in first_events
     assert any(command.reason == "confirm_done" for command in first_commands)
@@ -451,6 +469,7 @@ def test_completed_search_dispatches_return_home() -> None:
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
     task_id = output.assignments[0].task_id
     task = scheduler.task_manager.tasks[task_id]
     _cover_all_cells_except(grid_map, set())
@@ -460,6 +479,7 @@ def test_completed_search_dispatches_return_home() -> None:
     state.position = task.waypoints[-1]
 
     commands, _ = scheduler.update_after_step(now=10.0)
+    _apply_commands(fleet, grid_map, commands, now=10.0)
 
     assert any(command.command == CommandType.RETURN_HOME and command.reason == "mission_complete" for command in commands)
     assert fleet.get_uav("uav_01").state.status == UAVStatus.RETURNING
@@ -471,6 +491,7 @@ def test_finished_search_route_gets_supplemental_task_when_coverage_remains() ->
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, output.commands, now=0.0)
     task_id = output.assignments[0].task_id
     state = fleet.get_uav("uav_01").state
     state.position = state.path[-1]
@@ -481,6 +502,7 @@ def test_finished_search_route_gets_supplemental_task_when_coverage_remains() ->
     scheduler.update_after_step(now=10.0)
     assert scheduler.should_run_regular_cycle()
     output = scheduler.regular_cycle(now=10.0)
+    _apply_commands(fleet, grid_map, output.commands, now=10.0)
 
     assert scheduler.task_manager.tasks[task_id].status == TaskStatus.COMPLETED
     assert any(assignment.task_id.startswith("supplemental_") for assignment in output.assignments)
@@ -496,6 +518,7 @@ def test_idle_uav_takes_nonreserved_search_work() -> None:
     fleet = FleetManager.from_config(config, config["scenario"])
     scheduler = Scheduler(grid_map, fleet, config)
     initial_output = scheduler.regular_cycle(now=0.0)
+    _apply_commands(fleet, grid_map, initial_output.commands, now=0.0)
     finished_task_id = next(assignment.task_id for assignment in initial_output.assignments if assignment.uav_id == "uav_01")
     finished_state = fleet.get_uav("uav_01").state
     finished_state.position = finished_state.path[-1]
@@ -596,6 +619,7 @@ def test_idle_uav_returns_when_only_ignored_fragments_remain() -> None:
     state.available = True
 
     commands = scheduler._dispatch_completed_search_returns(now=10.0)
+    _apply_commands(fleet, grid_map, commands, now=10.0)
 
     assert any(command.command == CommandType.RETURN_HOME and command.reason == "mission_complete" for command in commands)
     assert fleet.get_uav("uav_01").state.status == UAVStatus.RETURNING
@@ -603,6 +627,7 @@ def test_idle_uav_returns_when_only_ignored_fragments_remain() -> None:
 
 def test_assignment_reorders_task_waypoints_for_current_uav_position() -> None:
     config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["search"]["mission_complete_coverage_threshold"] = 1.0
     grid_map = build_grid_map(config)
     _cover_all_cells_except(grid_map, {Position(0, 0), Position(9, 0)})
     fleet = FleetManager.from_config(config, config["scenario"])
@@ -632,4 +657,9 @@ def test_assignment_reorders_task_waypoints_for_current_uav_position() -> None:
 def _cover_all_cells_except(grid_map, uncovered: set[Position]) -> None:
     for cell in grid_map.get_searchable_cells():
         grid_map.set_cell(cell, {"search_confidence": 0.0 if cell in uncovered else 1.0})
+
+
+def _apply_commands(fleet: FleetManager, grid_map, commands, now: float) -> None:
+    applier = CommandApplier(fleet, grid_map)
+    applier.apply([ControlCommand.from_decision(command, issued_at=now) for command in commands], now=now)
 

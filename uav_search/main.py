@@ -84,14 +84,10 @@ def run(
     # 调度器是决策核心，协调任务分配、路径规划等
     scheduler = Scheduler(grid_map, fleet, config)
 
-    # 步骤5: 执行首次决策
-    # 生成初始搜索任务，分配给无人机，规划路径
-    decision_output = scheduler.regular_cycle(now=0.0)
-
     # 步骤6: 运行仿真主循环
     # 创建仿真器，执行时间步进仿真
     simulator = Simulator(grid_map, fleet, config)
-    simulator.record_snapshot(scheduler=scheduler, commands=decision_output.commands)  # 记录初始状态快照
+    simulator.run_initial_decision(scheduler)
 
     # 创建场景事件注入器（用于注入预设事件，如目标发现、地图更新等）
     event_injector = ScenarioEventInjector(scenario.get("events", []))
@@ -143,12 +139,12 @@ def run(
     # 返回最终决策输出
     return DecisionOutput(
         timestamp=simulator.time_s,
-        commands=decision_output.commands,
-        assignments=decision_output.assignments,
-        events_handled=decision_output.events_handled,
+        commands=[],
+        assignments=[],
+        events_handled=[],
         global_coverage=grid_map.coverage_rate(),
         priority_coverage=grid_map.coverage_rate(priority_only=True),
-        decision_latency_ms=decision_output.decision_latency_ms,
+        decision_latency_ms=0.0,
     )
 
 

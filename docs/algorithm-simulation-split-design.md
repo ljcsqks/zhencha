@@ -4,6 +4,10 @@
 
 Draft for the first architecture split milestone. The first implementation phase keeps the algorithm model in the same Python process as the simulator. The goal is to make the interface boundary explicit before moving the algorithm behind a separate service.
 
+Phase 1 implementation scope is limited to Migration Plan steps 0-5: freeze baseline, add contracts, add `ObservationBuilder`, add `SchedulerAlgorithmAdapter`, add `CommandApplier`, and refactor the simulator tick loop. FastAPI, WebSocket, and Web MVP work must wait until these steps pass the old CLI scenarios and the target confirmation scenario.
+
+Phase 0.5b boundary hardening is implemented in-process. The CLI now enters the first decision through `Simulator.run_initial_decision()`, scenario events enter through the simulator event queue, `ObservationBuilder` lives under `uav_search/simulation`, and `contracts.py` stays free of map and fleet imports. `SchedulerAlgorithmAdapter` consumes recent `CommandAck` records before deciding, `CommandApplier` owns path installation and UAV execution state, and `Scheduler` no longer calls `fleet.assign_path` or writes real UAV execution fields directly. `MAP_UPDATE`, `UAV_OFFLINE`, and `UAV_RECOVERED` are applied by the simulator before the observation is built. `CONFLICT_YIELD` is logged as an advisory no-op in phase 1 unless metadata explicitly marks it as a physical path change.
+
 ## Goals
 
 - Keep the current map, A*, simulation, event, metrics, search scheduling, and target confirmation behavior usable from the existing CLI.
@@ -240,6 +244,8 @@ Required fields:
 - `target`
 - `task_id`
 - `reason`
+- `issued_at`
+- `ttl_s`
 - `metadata`
 
 Executable command types for phase 1:
@@ -249,6 +255,13 @@ Executable command types for phase 1:
 - `RETURN_HOME`
 - `HOLD`
 - `CANCEL_COMMAND`
+
+`CANCEL_COMMAND` semantics:
+
+- If `metadata.command_id` exists, cancel that specific command.
+- If `metadata.command_id` is absent, cancel the UAV's current active command.
+- The simulator must emit a `cancelled` acknowledgement.
+- The algorithm decides whether to reassign work after it receives the acknowledgement.
 
 High-level decisions such as `ASSIGN_SEARCH_TASK` may appear as `intent` or `metadata`, but the simulator should execute one of the concrete command types above.
 
@@ -289,6 +302,11 @@ Acknowledgement statuses:
 
 The next `Observation` must include recent command acknowledgements. This is especially important for target confirmation. If `CONFIRM_TARGET` is rejected because the path is unreachable or the UAV lacks battery, the algorithm needs that ack to reassign the task or mark confirmation failed.
 
+Phase 1 acknowledgement retention:
+
+- Carry the most recent 200 acknowledgements or the acknowledgements from the last 30 seconds, whichever is smaller.
+- Each UAV must keep at least the latest acknowledgement for its active command.
+
 ### Snapshot
 
 `Snapshot` is for replay, Web display, and CLI artifacts:
@@ -306,6 +324,8 @@ The next `Observation` must include recent command acknowledgements. This is esp
 - `metrics`
 
 Snapshots should remain append-only during a run. Web clients should be able to reconstruct the visible state from snapshots without calling algorithm internals.
+
+Phase 1 replay policy stores a complete snapshot every tick. This favors debugging and replay clarity over storage optimization.
 
 ## CommandApplier
 
@@ -335,6 +355,8 @@ Initial responsibilities:
 - Convert existing `DecisionCommand` output into `ControlCommand`.
 - Include scheduler task and target summaries in `DecisionOutput`.
 - Feed recent `CommandAck` values back into scheduler state where needed.
+
+The adapter must hold and reuse one legacy `Scheduler` instance for the whole run. It must not rebuild `Scheduler` or `TaskManager` every tick. `Observation` is for synchronizing external world state, events, and command acknowledgements.
 
 This adapter lets the project introduce the boundary without rewriting the scheduler in the same step.
 
@@ -371,6 +393,7 @@ This adapter lets the project introduce the boundary without rewriting the sched
 - Move command execution and command lifecycle handling out of scheduler-facing code.
 - Produce `CommandAck` records.
 - Keep path following, confirm target execution, return-home, hold, and cancellation behavior testable in isolation.
+- First implementation must not rewrite the UAV movement model or path execution. It should concentrate existing command application behavior while preserving legacy CLI behavior.
 
 ### 5. Refactor Simulator Tick Loop
 
@@ -449,6 +472,11 @@ The old CLI should use the same loop as the future server.
 - Old CLI scenarios still run through the new loop.
 - `area_search_2uav_target_confirm` still produces one target found event and a successful confirmation when the target is reachable.
 - Coverage remains at or above the configured mission threshold for basic scenarios.
+- `time_to_95_coverage_s` does not exceed the frozen baseline by more than 15%.
+- `total_distance_m` does not exceed the frozen baseline by more than 15%.
+- `confirm_success_rate` remains `1.0` for the target confirmation scenario.
+- `interrupted_task_resume_rate` remains `1.0` for the target confirmation scenario.
+- `no_fly_violations` remains `0`.
 - Snapshots include `commands`, `command_acks`, `tasks`, `targets`, and metrics.
 - The algorithm can be called through `SchedulerAlgorithmAdapter.decide(observation)`.
 - The simulator applies commands only through `CommandApplier`.
@@ -458,7 +486,5 @@ The old CLI should use the same loop as the future server.
 
 - How many historical `CommandAck` records should each observation carry?
 - Should map arrays be encoded as nested lists, compact run-length rows, or NumPy-friendly binary payloads for the WebSocket path?
-- Should `CANCEL_COMMAND` require a target `command_id`, or should it cancel the active command for the UAV by default?
-- What tolerance should be used when comparing baseline metrics after the loop refactor?
 - Should replay files store every full snapshot, or periodic full snapshots plus deltas?
 - How many simultaneous algorithm instances should the server support in later service mode?

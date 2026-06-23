@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from uav_search.core.data_types import Event, EventPriority, EventType
-from uav_search.core.scheduler import Scheduler
 
 
 DEFAULT_PRIORITY = {
@@ -31,12 +30,11 @@ class ScenarioEventInjector:
             key=lambda item: item.time_s,
         )
 
-    def emit_due(self, current_time_s: float, scheduler: Scheduler) -> list[Event]:
+    def emit_due(self, current_time_s: float) -> list[Event]:
         emitted: list[Event] = []
         for scheduled in self.events:
             if scheduled.emitted or scheduled.time_s > current_time_s:
                 continue
-            scheduler.event_manager.emit(scheduled.event)
             scheduled.emitted = True
             emitted.append(scheduled.event)
         return emitted
