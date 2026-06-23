@@ -28,3 +28,14 @@ def test_scenario_event_injector_emits_due_events_once() -> None:
     assert len(emitted) == 1
     assert emitted[0].type == EventType.MAP_UPDATE
     assert emitted_again == []
+
+
+def test_target_confirm_scenario_is_separate_from_base_2uav() -> None:
+    base = load_config("config/default.yaml", "config/scenarios/area_search_2uav.yaml")
+    target_confirm = load_config("config/default.yaml", "config/scenarios/area_search_2uav_target_confirm.yaml")
+
+    assert base["scenario"].get("events", []) == []
+    assert any(
+        event["type"] == EventType.TARGET_FOUND.value
+        for event in target_confirm["scenario"].get("events", [])
+    )

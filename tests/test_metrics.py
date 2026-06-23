@@ -30,7 +30,18 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
             "time_s": 1.0,
             "global_coverage": 0.5,
             "priority_coverage": 0.0,
-            "events": ["scenario_target_found_001"],
+            "events": ["target_found_manual"],
+            "target_metrics": {
+                "target_a": {
+                    "found_time_s": 1.0,
+                    "assigned_time_s": 1.5,
+                    "done_time_s": 2.0,
+                    "success": True,
+                    "interrupted_task_id": "task_001",
+                    "resumed_time_s": 2.5,
+                    "coverage_at_done": 0.8,
+                }
+            },
             "uavs": [{"position": {"x": 0, "y": 0}, "total_distance_m": 5.0, "task_id": None}],
         },
         {
@@ -38,6 +49,17 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
             "global_coverage": 1.0,
             "priority_coverage": 0.0,
             "events": ["confirm_done_confirm_target_001", "scenario_map_update_002"],
+            "target_metrics": {
+                "target_a": {
+                    "found_time_s": 1.0,
+                    "assigned_time_s": 1.5,
+                    "done_time_s": 2.0,
+                    "success": True,
+                    "interrupted_task_id": "task_001",
+                    "resumed_time_s": 2.5,
+                    "coverage_at_done": 0.8,
+                }
+            },
             "uavs": [{"position": {"x": 0, "y": 0}, "total_distance_m": 20.0, "task_id": "supplemental_001"}],
         },
     ]
@@ -58,6 +80,12 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
     assert metrics.supplemental_task_count == 1
     assert metrics.final_uncovered_cells == 0
     assert metrics.ignored_uncovered_cells == 0
+    assert metrics.target_response_time_s == 0.5
+    assert metrics.target_confirm_duration_s == 0.5
+    assert metrics.confirm_success_rate == 1.0
+    assert metrics.search_resume_delay_s == 0.5
+    assert abs(metrics.coverage_gap_at_confirm_done - 0.15) < 1e-9
+    assert metrics.interrupted_task_resume_rate == 1.0
     assert metrics.post_95_extra_time_s == 0.0
     assert metrics.post_95_extra_distance_m == 0.0
 

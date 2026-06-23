@@ -108,6 +108,216 @@ def test_scheduler_handles_target_found_event() -> None:
     assert fleet.get_uav("uav_01").state.status == UAVStatus.CONFIRMING
 
 
+def test_target_found_without_source_selects_lowest_cost_uav() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_2uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_no_source",
+            type=EventType.TARGET_FOUND,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id=None,
+            data={
+                "target_id": "target_near_top",
+                "position": {"x": 5, "y": 45},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+
+    output = scheduler.regular_cycle(now=0.0)
+
+    command = next(command for command in output.commands if command.command == CommandType.CONFIRM_TARGET)
+    assert command.uav_id == "uav_02"
+    assert fleet.get_uav("uav_02").state.status == UAVStatus.CONFIRMING
+
+
+def test_target_found_interrupts_only_one_searching_uav() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_3uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    scheduler.regular_cycle(now=0.0)
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=1.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id=None,
+            data={
+                "target_id": "target_001",
+                "position": {"x": 5, "y": 5},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+    scheduler.regular_cycle(now=1.0)
+
+    statuses = [state.status for state in fleet.get_all_states()]
+    assert statuses.count(UAVStatus.CONFIRMING) == 1
+    assert statuses.count(UAVStatus.SEARCHING) >= 1
+
+
+def test_confirmation_done_resumes_interrupted_search_task() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["search"]["confirm_duration_steps"] = 1
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    initial_output = scheduler.regular_cycle(now=0.0)
+    interrupted_task_id = initial_output.assignments[0].task_id
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=1.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id="uav_01",
+            data={
+                "target_id": "target_001",
+                "position": {"x": 5, "y": 5},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+    scheduler.regular_cycle(now=1.0)
+    state = fleet.get_uav("uav_01").state
+    state.position = state.path[-1]
+    state.path_index = len(state.path) - 1
+
+    commands, events = scheduler.update_after_step(now=2.0)
+
+    assert "confirm_done_confirm_target_001" in events
+    assert any(command.reason == "resume_interrupted_search" for command in commands)
+    assert scheduler.task_manager.tasks[interrupted_task_id].status == TaskStatus.IN_PROGRESS
+    assert fleet.get_uav("uav_01").state.status == UAVStatus.SEARCHING
+
+
+def test_duplicate_target_id_does_not_dispatch_twice() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    event = Event(
+        id="target_found_001",
+        type=EventType.TARGET_FOUND,
+        timestamp=0.0,
+        priority=EventPriority.CRITICAL,
+        source_uav_id=None,
+        data={
+            "target_id": "target_001",
+            "position": {"x": 5, "y": 5},
+            "confidence": 0.9,
+            "target_type": "person",
+        },
+    )
+
+    first = scheduler.handle_event(event)
+    second = scheduler.handle_event(event)
+
+    assert sum(1 for command in first if command.command == CommandType.CONFIRM_TARGET) == 1
+    assert second == []
+
+
+def test_confirm_path_avoids_blocked_target_surroundings() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    target = Position(5, 5)
+    grid_map.set_cell(target, {"cell_type": CellType.OBSTACLE})
+    grid_map.set_cell(Position(5, 3), {"cell_type": CellType.NO_FLY})
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+
+    commands = scheduler.handle_event(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id=None,
+            data={
+                "target_id": "target_001",
+                "position": {"x": target.x, "y": target.y},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+
+    command = next(command for command in commands if command.command == CommandType.CONFIRM_TARGET)
+    assert all(grid_map.is_passable(point) for point in command.path)
+    assert target not in command.path
+
+
+def test_unreachable_target_confirmation_fails_without_sticking_confirming() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["search"]["confirm_orbit_max_extra_radius_cells"] = 1
+    grid_map = build_grid_map(config)
+    for y in range(0, 9):
+        for x in range(0, 9):
+            if (x, y) != (0, 0):
+                grid_map.set_cell(Position(x, y), {"cell_type": CellType.OBSTACLE})
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+
+    commands = scheduler.handle_event(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id=None,
+            data={
+                "target_id": "target_001",
+                "position": {"x": 5, "y": 5},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+
+    assert any(command.reason == "CONFIRM_FAILED" for command in commands)
+    assert all(state.status != UAVStatus.CONFIRMING for state in fleet.get_all_states())
+
+
+def test_low_battery_uav_is_not_selected_for_confirmation() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_2uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    fleet.get_uav("uav_02").state.battery = 0.21
+    scheduler = Scheduler(grid_map, fleet, config)
+
+    scheduler.event_manager.emit(
+        Event(
+            id="target_found_001",
+            type=EventType.TARGET_FOUND,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            source_uav_id="uav_02",
+            data={
+                "target_id": "target_001",
+                "position": {"x": 5, "y": 45},
+                "confidence": 0.9,
+                "target_type": "person",
+            },
+        )
+    )
+    output = scheduler.regular_cycle(now=0.0)
+
+    command = next(command for command in output.commands if command.command == CommandType.CONFIRM_TARGET)
+    assert command.uav_id != "uav_02"
+
+
 def test_target_confirmation_uses_orbit_path() -> None:
     config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["confirm_orbit_radius_cells"] = 2

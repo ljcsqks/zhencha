@@ -97,6 +97,7 @@ class EventType(Enum):
     TARGET_FOUND = "TARGET_FOUND"
     TARGET_APPEAR = "TARGET_APPEAR"
     CONFIRM_DONE = "CONFIRM_DONE"
+    CONFIRM_FAILED = "CONFIRM_FAILED"
     UAV_OFFLINE = "UAV_OFFLINE"
     UAV_RECOVERED = "UAV_RECOVERED"
     MAP_UPDATE = "MAP_UPDATE"
@@ -272,6 +273,7 @@ class Task:
     coverage_waypoints: list[Position] = field(default_factory=list)
     last_replan_time: float = 0.0
     replan_count: int = 0
+    resume_owner_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.coverage_waypoints and self.waypoints:

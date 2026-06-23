@@ -35,6 +35,12 @@ class MetricsResult:
     replan_count: int
     coverage_gain_per_meter: float
     per_uav_workload_balance: float
+    target_response_time_s: float | None
+    target_confirm_duration_s: float | None
+    confirm_success_rate: float
+    search_resume_delay_s: float | None
+    coverage_gap_at_confirm_done: float
+    interrupted_task_resume_rate: float
     supplemental_task_count: int
     ignored_uncovered_cells: int
     final_uncovered_cells: int
@@ -61,6 +67,7 @@ def compute_metrics(
     initial_coverage = float(snapshots[0].get("global_coverage", 0.0)) if snapshots else 0.0
     final_uncovered_cells = len(grid_map.get_unsearched_cells(threshold=0.95))
     final_priority_uncovered_cells = _count_final_priority_uncovered(grid_map)
+    target_metrics = _latest_target_metrics(snapshots)
     supplemental_task_count = len(
         {
             uav.get("task_id")
@@ -84,7 +91,7 @@ def compute_metrics(
         conflict_count=sum(1 for event_id in event_ids if "conflict" in event_id),
         no_fly_violations=_count_no_fly_violations(grid_map, snapshots),
         map_update_count=_count_events(event_ids, "scenario_map_update"),
-        target_found_count=_count_events(event_ids, "scenario_target_found"),
+        target_found_count=_target_found_count(target_metrics, event_ids, snapshots),
         confirm_done_count=sum(1 for event_id in event_ids if event_id.startswith("confirm_done_")),
         time_to_95_coverage_s=time_to_95,
         time_to_priority_coverage_s=_first_time_reaching(snapshots, "priority_coverage", 0.95),
@@ -94,6 +101,12 @@ def compute_metrics(
         replan_count=_replan_count(snapshots, event_ids),
         coverage_gain_per_meter=(grid_map.coverage_rate() - initial_coverage) / total_distance_m if total_distance_m > 0 else 0.0,
         per_uav_workload_balance=_workload_balance([state.total_distance_m for state in states]),
+        target_response_time_s=_avg_target_delta(target_metrics, "found_time_s", "assigned_time_s"),
+        target_confirm_duration_s=_avg_target_delta(target_metrics, "assigned_time_s", "done_time_s"),
+        confirm_success_rate=_confirm_success_rate(target_metrics),
+        search_resume_delay_s=_avg_target_delta(target_metrics, "done_time_s", "resumed_time_s", require_interrupted=True),
+        coverage_gap_at_confirm_done=_coverage_gap_at_confirm_done(target_metrics, mission_complete_coverage_threshold),
+        interrupted_task_resume_rate=_interrupted_task_resume_rate(target_metrics),
         supplemental_task_count=supplemental_task_count,
         ignored_uncovered_cells=final_uncovered_cells if grid_map.coverage_rate() >= mission_complete_coverage_threshold else 0,
         final_uncovered_cells=final_uncovered_cells,
@@ -119,6 +132,24 @@ def _first_time_reaching(snapshots: list[dict[str, Any]], field: str, threshold:
 
 def _count_events(event_ids: list[str], prefix_or_id: str) -> int:
     return sum(1 for event_id in event_ids if event_id == prefix_or_id or event_id.startswith(prefix_or_id))
+
+
+def _target_found_count(
+    target_metrics: dict[str, dict[str, Any]],
+    event_ids: list[str],
+    snapshots: list[dict[str, Any]],
+) -> int:
+    if target_metrics:
+        return len(target_metrics)
+    command_targets = {
+        command.get("task_id")
+        for snapshot in snapshots
+        for command in snapshot.get("commands", [])
+        if command.get("command") == "CONFIRM_TARGET"
+    }
+    if command_targets:
+        return len(command_targets)
+    return sum(1 for event_id in event_ids if "target_found" in event_id.lower())
 
 
 def _count_no_fly_violations(grid_map: GridMap, snapshots: list[dict[str, Any]]) -> int:
@@ -207,3 +238,63 @@ def _workload_balance(distances: list[float]) -> float:
     variance = sum((distance - mean) ** 2 for distance in active) / len(active)
     coefficient_of_variation = math.sqrt(variance) / mean
     return 1.0 / (1.0 + coefficient_of_variation)
+
+
+def _latest_target_metrics(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    for snapshot in reversed(snapshots):
+        metrics = snapshot.get("target_metrics")
+        if isinstance(metrics, dict):
+            return {str(target_id): dict(record) for target_id, record in metrics.items() if isinstance(record, dict)}
+    return {}
+
+
+def _avg_target_delta(
+    target_metrics: dict[str, dict[str, Any]],
+    start_key: str,
+    end_key: str,
+    require_interrupted: bool = False,
+) -> float | None:
+    values: list[float] = []
+    for record in target_metrics.values():
+        if require_interrupted and not record.get("interrupted_task_id"):
+            continue
+        start = record.get(start_key)
+        end = record.get(end_key)
+        if start is None or end is None:
+            continue
+        values.append(max(0.0, float(end) - float(start)))
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _confirm_success_rate(target_metrics: dict[str, dict[str, Any]]) -> float:
+    if not target_metrics:
+        return 0.0
+    successes = sum(1 for record in target_metrics.values() if bool(record.get("success")))
+    return successes / len(target_metrics)
+
+
+def _coverage_gap_at_confirm_done(
+    target_metrics: dict[str, dict[str, Any]],
+    mission_threshold: float,
+) -> float:
+    gaps: list[float] = []
+    for record in target_metrics.values():
+        if not record.get("interrupted_task_id"):
+            continue
+        coverage_at_done = record.get("coverage_at_done")
+        if coverage_at_done is None:
+            continue
+        gaps.append(max(0.0, mission_threshold - float(coverage_at_done)))
+    if not gaps:
+        return 0.0
+    return sum(gaps) / len(gaps)
+
+
+def _interrupted_task_resume_rate(target_metrics: dict[str, dict[str, Any]]) -> float:
+    interrupted = [record for record in target_metrics.values() if record.get("interrupted_task_id")]
+    if not interrupted:
+        return 1.0
+    resumed = sum(1 for record in interrupted if record.get("resumed_time_s") is not None)
+    return resumed / len(interrupted)

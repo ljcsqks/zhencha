@@ -46,6 +46,17 @@ class SupplementalCandidate:
     waypoints: list[Position]
 
 
+@dataclass
+class ConfirmPlan:
+    uav: UAVState
+    target: Position
+    orbit_waypoints: list[Position]
+    route: list[Position]
+    cost_m: float
+    interrupted_task_id: str | None = None
+    interrupt_cost_m: float = 0.0
+
+
 class Scheduler:
     """主控调度器类
 
@@ -91,9 +102,38 @@ class Scheduler:
         self.task_manager = TaskManager()
         self.event_manager = EventManager(config["scheduler"].get("event_debounce_s", 0.2))
         self._confirmations: dict[str, dict[str, Any]] = {}  # 追踪目标确认任务状态
+        self._confirmed_targets: set[str] = set()
+        self._target_metrics: dict[str, dict[str, Any]] = {}
         self._initialized = False  # 标记是否已生成初始任务
         self._supplemental_task_seq = 0
         self.replan_count = 0
+
+    def target_metrics_snapshot(self) -> dict[str, dict[str, Any]]:
+        return {target_id: dict(record) for target_id, record in self._target_metrics.items()}
+
+    def task_status_snapshot(self) -> dict[str, Any]:
+        status_counts = {
+            "pending": 0,
+            "assigned": 0,
+            "in_progress": 0,
+            "completed": 0,
+            "blocked": 0,
+            "cancelled": 0,
+        }
+        for task in self.task_manager.tasks.values():
+            key = task.status.value.lower()
+            status_counts[key] = status_counts.get(key, 0) + 1
+        confirmations = [
+            {
+                "task_id": task_id,
+                "target_id": str(record.get("target_id")),
+                "uav_id": str(record.get("uav_id")),
+                "status": str(record.get("status", "CONFIRMING")),
+                "interrupted_task_id": record.get("interrupted_task_id"),
+            }
+            for task_id, record in sorted(self._confirmations.items())
+        ]
+        return {"status_counts": status_counts, "confirmations": confirmations}
 
     def regular_cycle(self, now: float = 0.0) -> DecisionOutput:
         """执行一次完整的决策周期
@@ -289,11 +329,11 @@ class Scheduler:
             if uav.status != UAVStatus.CONFIRMING or uav.path_index < len(uav.path) - 1:
                 continue
 
-            # 增加确认计数
-            confirmation["dwell_steps"] += 1
-
-            # 检查是否达到确认所需步数
-            if confirmation["dwell_steps"] < int(self.config["search"]["confirm_duration_steps"]):
+            if confirmation.get("dwell_started_at") is None:
+                step_s = float(self.config.get("simulation", {}).get("time_step_s", 1.0))
+                confirmation["dwell_started_at"] = now - step_s
+            dwell_s = float(confirmation.get("dwell_s", 0.0))
+            if now - float(confirmation["dwell_started_at"]) < dwell_s:
                 continue
 
             # 触发确认完成事件
@@ -1098,107 +1138,260 @@ class Scheduler:
         )
 
     def _handle_target_found(self, event: Event) -> list[DecisionCommand]:
-        """处理目标发现事件
-
-        当无人机发现目标时触发，发现者切换为确认状态并抵近目标。
-
-        参数：
-            event: 目标发现事件对象
-
-        返回：
-            list[DecisionCommand]: 包含确认指令的列表
-
-        处理流程：
-            1. 将发现者状态切换为CONFIRMING
-            2. 中断其当前搜索任务
-            3. 创建目标确认任务
-            4. 规划到目标的路径
-            5. 追踪确认任务状态（用于后续判断完成）
-        """
-        if event.source_uav_id is None:
-            return []
         target_data = event.data
         target_pos_data = target_data.get("position")
         if target_pos_data is None:
             return []
 
         target = Position(int(target_pos_data["x"]), int(target_pos_data["y"]))
-        uav = self.fleet.get_uav(event.source_uav_id).state
-        interrupted_task_id = uav.current_task_id
-
-        # 将被中断的任务重新放回任务池
-        if interrupted_task_id in self.task_manager.tasks:
-            self.task_manager.requeue_task(interrupted_task_id, now=event.timestamp)
-            self._refresh_task_progress(event.timestamp)
-
-        uav.status = UAVStatus.CONFIRMING
-        uav.available = False
         confirm_task_id = f"confirm_{target_data.get('target_id', event.id)}"
+        target_id = str(target_data.get("target_id", event.id))
+        if target_id in self._confirmed_targets or confirm_task_id in self._confirmations:
+            return []
+
+        self._target_metrics[target_id] = {
+            "target_id": target_id,
+            "found_time_s": event.timestamp,
+            "assigned_time_s": None,
+            "done_time_s": None,
+            "failed_time_s": None,
+            "success": False,
+            "interrupted_task_id": None,
+            "resumed_time_s": None,
+            "coverage_at_found": self.grid_map.coverage_rate(),
+            "coverage_at_done": None,
+        }
+
+        plan = self._select_confirm_uav(target, event)
+        if plan is None:
+            return self._mark_confirm_failed(target_id, confirm_task_id, target, event.timestamp, "confirm_uav_not_available")
+
+        uav = plan.uav
+        interrupted_task_id = self._pause_search_for_confirmation(uav, event.timestamp)
+        plan.interrupted_task_id = interrupted_task_id
         uav.current_task_id = confirm_task_id
+        self.fleet.assign_path(uav.id, plan.route, status=UAVStatus.CONFIRMING)
 
-        orbit_waypoints = self._build_confirm_orbit(target)
-
-        # 记录确认任务状态，用于后续判断完成
         self._confirmations[confirm_task_id] = {
             "uav_id": uav.id,
             "target": target,
-            "orbit_waypoints": orbit_waypoints,
-            "target_id": target_data.get("target_id", event.id),
-            "dwell_steps": 0,
+            "orbit_waypoints": plan.orbit_waypoints,
+            "target_id": target_id,
+            "target_type": target_data.get("target_type"),
+            "confidence": float(target_data.get("confidence", 0.0)),
+            "status": "CONFIRMING",
+            "assigned_at": event.timestamp,
+            "dwell_s": self._confirm_dwell_s(event),
+            "dwell_started_at": None,
+            "interrupted_task_id": interrupted_task_id,
+            "resume_owner_id": uav.id if interrupted_task_id else None,
         }
-
-        route = self._plan_route_through_waypoints(uav, orbit_waypoints)
-        if not route:
-            return [
-                DecisionCommand(
-                    uav_id=uav.id,
-                    command=CommandType.HOLD,
-                    task_id=confirm_task_id,
-                    target=target,
-                    path=[],
-                    reason="target_confirm_orbit_path_not_found",
-                )
-            ]
-
-        self.fleet.assign_path(uav.id, route, status=UAVStatus.CONFIRMING)
+        self._target_metrics[target_id].update(
+            {
+                "assigned_time_s": event.timestamp,
+                "uav_id": uav.id,
+                "interrupted_task_id": interrupted_task_id,
+            }
+        )
         return [
             DecisionCommand(
                 uav_id=uav.id,
                 command=CommandType.CONFIRM_TARGET,
                 task_id=confirm_task_id,
                 target=target,
-                path=route,
+                path=plan.route,
                 reason="target_found",
             )
         ]
 
-    def _build_confirm_orbit(self, target: Position) -> list[Position]:
-        radius = max(1, int(self.config["search"].get("confirm_orbit_radius_cells", 2)))
-        laps = max(1, int(self.config["search"].get("confirm_orbit_laps", 1)))
+    def _select_confirm_uav(self, target: Position, event: Event) -> ConfirmPlan | None:
+        candidates: list[ConfirmPlan] = []
+        source_bonus_m = float(self.config["search"].get("confirm_source_preference_bonus_m", 120.0))
+        for state in self.fleet.get_all_states():
+            if state.status == UAVStatus.OFFLINE or state.status in (UAVStatus.CONFIRMING, UAVStatus.RETURNING):
+                continue
+            if state.status != UAVStatus.IDLE and state.status != UAVStatus.SEARCHING:
+                continue
+            plan = self._build_confirm_plan(state, target, event)
+            if plan is None:
+                continue
+            interrupt_cost_m = self._confirm_interrupt_cost(state)
+            route_distance_m = self._route_distance_m(plan.route)
+            return_distance_m = self._return_distance_m_from(plan.route[-1], state)
+            if return_distance_m == float("inf"):
+                continue
+            if not self._battery_supports_confirmation(state, route_distance_m + return_distance_m):
+                continue
+            reserve = float(self.config["uav"].get("battery_threshold", 0.2))
+            available_m = max(0.0, state.battery - reserve) * state.velocity_mps * float(self.config["uav"]["endurance_s"])
+            margin_m = available_m - route_distance_m - return_distance_m
+            battery_risk_m = max(0.0, self.grid_map.resolution_m * 10.0 - margin_m)
+            source_bonus = source_bonus_m if event.source_uav_id == state.id else 0.0
+            plan.cost_m = route_distance_m + interrupt_cost_m + battery_risk_m - source_bonus
+            plan.interrupt_cost_m = interrupt_cost_m
+            candidates.append(plan)
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: (item.cost_m, item.uav.id))
 
-        for current_radius in range(radius, 0, -1):
-            candidates = self._square_orbit_candidates(target, current_radius)
-            if candidates:
-                return candidates * laps
+    def _build_confirm_plan(self, uav: UAVState, target: Position, event: Event) -> ConfirmPlan | None:
+        radius = max(1, int(event.data.get("orbit_radius_cells", self.config["search"].get("confirm_orbit_radius_cells", 2))))
+        laps = max(1, int(event.data.get("orbit_laps", self.config["search"].get("confirm_orbit_laps", 1))))
+        max_extra_radius = max(0, int(self.config["search"].get("confirm_orbit_max_extra_radius_cells", 5)))
 
-        return [target] if self.grid_map.is_passable(target) else []
+        for current_radius in range(radius, radius + max_extra_radius + 1):
+            orbit = self._build_confirm_orbit(target, current_radius, laps, require_complete=True)
+            if not orbit:
+                continue
+            route = self._plan_route_through_waypoints(uav, orbit)
+            if route:
+                return ConfirmPlan(uav=uav, target=target, orbit_waypoints=orbit, route=route, cost_m=0.0)
 
-    def _square_orbit_candidates(self, target: Position, radius: int) -> list[Position]:
+        hover = self._nearest_observable_confirm_point(uav, target, radius, radius + max_extra_radius)
+        if hover is None:
+            return None
+        route = self._plan_route_through_waypoints(uav, [hover])
+        if not route:
+            return None
+        return ConfirmPlan(uav=uav, target=target, orbit_waypoints=[hover], route=route, cost_m=0.0)
+
+    def _build_confirm_orbit(
+        self,
+        target: Position,
+        radius: int | None = None,
+        laps: int | None = None,
+        require_complete: bool = False,
+    ) -> list[Position]:
+        radius = max(1, int(radius if radius is not None else self.config["search"].get("confirm_orbit_radius_cells", 2)))
+        laps = max(1, int(laps if laps is not None else self.config["search"].get("confirm_orbit_laps", 1)))
+        return self._square_orbit_candidates(target, radius, require_complete=require_complete) * laps
+
+    def _square_orbit_candidates(self, target: Position, radius: int, require_complete: bool = False) -> list[Position]:
         candidates: list[Position] = []
-        seen: set[Position] = set()
         offsets: list[tuple[int, int]] = []
         offsets.extend((dx, -radius) for dx in range(-radius, radius + 1))
         offsets.extend((radius, dy) for dy in range(-radius + 1, radius + 1))
         offsets.extend((dx, radius) for dx in range(radius - 1, -radius - 1, -1))
         offsets.extend((-radius, dy) for dy in range(radius - 1, -radius, -1))
-
+        expected_count = len(dict.fromkeys(offsets))
+        seen: set[Position] = set()
         for dx, dy in offsets:
             pos = Position(target.x + dx, target.y + dy)
-            if pos in seen or not self.grid_map.is_passable(pos):
+            if pos in seen:
                 continue
             seen.add(pos)
+            if not self.grid_map.is_passable(pos):
+                if require_complete:
+                    return []
+                continue
             candidates.append(pos)
+        if require_complete and len(candidates) != expected_count:
+            return []
         return candidates
+
+    def _nearest_observable_confirm_point(
+        self,
+        uav: UAVState,
+        target: Position,
+        min_radius: int,
+        max_radius: int,
+    ) -> Position | None:
+        candidates: list[Position] = []
+        for radius in range(max(1, min_radius), max(min_radius, max_radius) + 1):
+            candidates.extend(self._square_orbit_candidates(target, radius, require_complete=False))
+        candidates = sorted(set(candidates), key=lambda pos: (abs(pos.x - uav.position.x) + abs(pos.y - uav.position.y), pos.y, pos.x))
+        for candidate in candidates:
+            plan = self.planner.plan_path(uav, candidate, self.grid_map)
+            if plan.valid:
+                return candidate
+        return None
+
+    def _pause_search_for_confirmation(self, uav: UAVState, now: float) -> str | None:
+        task_id = uav.current_task_id
+        if uav.status != UAVStatus.SEARCHING or task_id not in self.task_manager.tasks:
+            return None
+        task = self.task_manager.tasks[task_id]
+        if task.type != TaskType.SEARCH:
+            return None
+        coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
+        remaining = [
+            waypoint
+            for waypoint in self._task_coverage_waypoints(task)
+            if self._point_adds_search_coverage(waypoint, uav.sensor_radius_cells, coverage_threshold)
+        ]
+        task.resume_owner_id = uav.id
+        task.assigned_uav_id = None
+        task.status = TaskStatus.PENDING
+        self._set_task_coverage_waypoints(task, remaining, now)
+        if not remaining:
+            self.task_manager.complete_task(task.id, now=now)
+            return None
+        uav.path = []
+        uav.path_index = 0
+        return task.id
+
+    def _confirm_interrupt_cost(self, state: UAVState) -> float:
+        if state.status != UAVStatus.SEARCHING or state.current_task_id not in self.task_manager.tasks:
+            return 0.0
+        task = self.task_manager.tasks[state.current_task_id]
+        remaining = len(self._task_coverage_waypoints(task))
+        return remaining * self.grid_map.resolution_m * float(self.config["search"].get("confirm_interrupt_waypoint_cost_weight", 0.5))
+
+    def _route_distance_m(self, route: list[Position]) -> float:
+        if len(route) < 2:
+            return 0.0
+        return sum(
+            ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5 * self.grid_map.resolution_m
+            for a, b in zip(route, route[1:])
+        )
+
+    def _return_distance_m_from(self, position: Position, state: UAVState) -> float:
+        return_state = replace(state, position=position)
+        plan = self.planner.plan_path(return_state, state.home_position, self.grid_map, task_id=state.current_task_id)
+        if not plan.valid:
+            return float("inf")
+        return self._route_distance_m(plan.path)
+
+    def _battery_supports_confirmation(self, state: UAVState, required_distance_m: float) -> bool:
+        reserve = float(self.config["uav"].get("battery_threshold", 0.2))
+        available_distance_m = max(0.0, state.battery - reserve) * state.velocity_mps * float(self.config["uav"]["endurance_s"])
+        return available_distance_m >= required_distance_m
+
+    def _confirm_dwell_s(self, event: Event) -> float:
+        if "dwell_s" in event.data:
+            return max(0.0, float(event.data["dwell_s"]))
+        step_s = float(self.config.get("simulation", {}).get("time_step_s", 1.0))
+        return max(0.0, int(self.config["search"].get("confirm_duration_steps", 1)) * step_s)
+
+    def _mark_confirm_failed(
+        self,
+        target_id: str,
+        confirm_task_id: str,
+        target: Position,
+        now: float,
+        reason: str,
+    ) -> list[DecisionCommand]:
+        record = self._target_metrics.setdefault(target_id, {"target_id": target_id, "found_time_s": now})
+        record.update({"failed_time_s": now, "success": False, "failure_reason": reason})
+        fallback = next((state for state in self.fleet.get_all_states() if state.status != UAVStatus.OFFLINE), None)
+        if fallback is None:
+            return []
+        if fallback.status == UAVStatus.CONFIRMING:
+            fallback.status = UAVStatus.IDLE
+            fallback.available = True
+            fallback.current_task_id = None
+            fallback.path = []
+            fallback.path_index = 0
+        return [
+            DecisionCommand(
+                uav_id=fallback.id,
+                command=CommandType.HOLD,
+                task_id=confirm_task_id,
+                target=target,
+                path=[],
+                reason="CONFIRM_FAILED",
+            )
+        ]
 
     def _handle_confirm_done(self, event: Event) -> list[DecisionCommand]:
         """处理目标确认完成事件
@@ -1219,11 +1412,25 @@ class Scheduler:
             5. 在下一轮拍卖中会重新分配新任务
         """
         task_id = event.data.get("task_id")
-        if task_id:
-            self._confirmations.pop(task_id, None)
+        confirmation = self._confirmations.pop(task_id, None) if task_id else None
         if event.source_uav_id is None:
             return []
         uav = self.fleet.get_uav(event.source_uav_id).state
+        target_id = str(event.data.get("target_id", confirmation.get("target_id") if confirmation else task_id))
+        self._confirmed_targets.add(target_id)
+        if target_id in self._target_metrics:
+            self._target_metrics[target_id].update(
+                {
+                    "done_time_s": event.timestamp,
+                    "success": True,
+                    "coverage_at_done": self.grid_map.coverage_rate(),
+                }
+            )
+
+        resume_command = self._resume_interrupted_search_after_confirm(confirmation, uav, event.timestamp)
+        if resume_command is not None:
+            return [resume_command]
+
         uav.status = UAVStatus.IDLE
         uav.available = True
         uav.current_task_id = None
@@ -1239,3 +1446,47 @@ class Scheduler:
                 reason="confirm_done",
             )
         ]
+
+    def _resume_interrupted_search_after_confirm(
+        self,
+        confirmation: dict[str, Any] | None,
+        uav: UAVState,
+        now: float,
+    ) -> DecisionCommand | None:
+        if not confirmation:
+            return None
+        interrupted_task_id = confirmation.get("interrupted_task_id")
+        if interrupted_task_id not in self.task_manager.tasks:
+            return None
+        task = self.task_manager.tasks[interrupted_task_id]
+        if task.status != TaskStatus.PENDING or not self._task_coverage_waypoints(task):
+            return None
+        if task.resume_owner_id not in (None, uav.id):
+            return None
+
+        waypoints = reorder_waypoints_for_uav(self._task_coverage_waypoints(task), uav.position)
+        if not waypoints:
+            return None
+        route = self._plan_route_through_waypoints(uav, waypoints)
+        if not route:
+            task.resume_owner_id = None
+            return None
+
+        self._set_task_coverage_waypoints(task, waypoints, now)
+        assignment = self.task_manager.assign_task(task.id, uav.id, now=now, bid_value=0.0)
+        self.task_manager.start_task(task.id, now=now)
+        uav.current_task_id = task.id
+        self.fleet.assign_path(uav.id, route, status=UAVStatus.SEARCHING)
+        task.resume_owner_id = None
+        target_id = str(confirmation.get("target_id", ""))
+        if target_id in self._target_metrics:
+            self._target_metrics[target_id]["resumed_time_s"] = now
+            self._target_metrics[target_id]["resume_assignment"] = assignment.task_id
+        return DecisionCommand(
+            uav_id=uav.id,
+            command=CommandType.FOLLOW_PATH,
+            task_id=task.id,
+            target=waypoints[-1],
+            path=route,
+            reason="resume_interrupted_search",
+        )

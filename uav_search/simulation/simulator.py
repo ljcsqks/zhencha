@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from uav_search.core.data_types import UAVStatus
+from uav_search.core.data_types import DecisionCommand, UAVStatus
 from uav_search.core.scheduler import Scheduler
 from uav_search.maps.grid_map import GridMap
 from uav_search.simulation.scenario_events import ScenarioEventInjector
@@ -57,6 +57,7 @@ class Simulator:
         self.time_s = 0.0  # 仿真时间从0开始
         self.snapshots: list[dict[str, Any]] = []  # 存储所有时间步的快照
         self._last_events: list[str] = []  # 追踪最近处理的事件
+        self._last_commands: list[DecisionCommand] = []
 
     def step(self, scheduler: Scheduler | None = None) -> None:
         """执行一个仿真时间步
@@ -98,10 +99,12 @@ class Simulator:
         # 决策后处理
         # 检查是否有需要更新状态的任务（如目标确认完成）
         if scheduler is not None:
-            _, handled_ids = scheduler.update_after_step(self.time_s)
+            commands, handled_ids = scheduler.update_after_step(self.time_s)
+            self._last_commands.extend(commands)
             self._last_events.extend(handled_ids)
             if scheduler.should_run_regular_cycle():
                 decision = scheduler.regular_cycle(now=self.time_s)
+                self._last_commands.extend(decision.commands)
                 self._last_events.extend(decision.events_handled)
 
         # 记录当前时间步的快照
@@ -157,6 +160,7 @@ class Simulator:
                 elif self._should_extend_for_return(return_grace_used, return_grace_steps):
                     return_grace_used += 1
             self._last_events = []
+            self._last_commands = []
 
             # 决策循环（如果提供了调度器）
             if scheduler is not None:
@@ -170,6 +174,7 @@ class Simulator:
                 if scheduler.should_run_regular_cycle():
                     decision = scheduler.regular_cycle(now=self.time_s)
                     self._last_events = decision.events_handled
+                    self._last_commands = list(decision.commands)
 
             # 步骤3: 推进仿真一个时间步
             self.step(scheduler=scheduler)
@@ -189,7 +194,11 @@ class Simulator:
             return False
         return any(state.status == UAVStatus.RETURNING for state in self.fleet.get_all_states())
 
-    def record_snapshot(self, scheduler: Scheduler | None = None) -> None:
+    def record_snapshot(
+        self,
+        scheduler: Scheduler | None = None,
+        commands: list[DecisionCommand] | None = None,
+    ) -> None:
         """记录当前时间步的快照
 
         将当前时刻的系统状态保存为快照，包括：
@@ -207,6 +216,12 @@ class Simulator:
                 "global_coverage": self.grid_map.coverage_rate(),
                 "priority_coverage": self.grid_map.coverage_rate(priority_only=True),
                 "replan_count": scheduler.replan_count if scheduler is not None else 0,
+                "target_metrics": scheduler.target_metrics_snapshot() if scheduler is not None else {},
+                "tasks": scheduler.task_status_snapshot() if scheduler is not None else {},
+                "commands": [
+                    _command_to_snapshot(command)
+                    for command in (commands if commands is not None else self._last_commands)
+                ],
                 "uavs": [
                     {
                         "id": state.id,
@@ -252,3 +267,14 @@ class Simulator:
         payload = {"run_id": run_id, "steps": self.snapshots}
         with output_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def _command_to_snapshot(command: DecisionCommand) -> dict[str, Any]:
+    return {
+        "command": command.command.value,
+        "uav_id": command.uav_id,
+        "task_id": command.task_id,
+        "target": asdict(command.target) if command.target is not None else None,
+        "path": [asdict(point) for point in command.path],
+        "reason": command.reason,
+    }

@@ -1,5 +1,5 @@
-name: "area_search_2uav"
-description: "500x500 area search with two UAVs, separated priority zones, one no-fly circle, and dynamic obstacle insertion."
+name: "area_search_2uav_target_confirm"
+description: "2-UAV area search variant with a source-free target confirmation event for A/B comparison."
 
 overrides:
   map:
@@ -55,16 +55,15 @@ uavs:
     initial_position: [0, 41]
     battery: 1.0
 
-# events:
-#   - time_s: 180
-#     type: "MAP_UPDATE"
-#     data:
-#       operation: "SET_REGION"
-#       shape: "rectangle"
-#       frame: "grid"
-#       x: 14
-#       y: 22
-#       width: 5
-#       height: 5
-#       cell_type: "OBSTACLE"
-events: []
+events:
+  - id: target_found_no_source
+    time_s: 10.0
+    type: TARGET_FOUND
+    data:
+      target_id: target_resume
+      position: {x: 20, y: 20}
+      confidence: 0.9
+      target_type: person
+      dwell_s: 1.0
+      orbit_radius_cells: 2
+      orbit_laps: 1

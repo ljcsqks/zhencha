@@ -33,6 +33,24 @@ def test_simulator_injects_due_scenario_events() -> None:
     assert any("event_map_update" in snapshot["events"] for snapshot in simulator.snapshots)
 
 
+def test_snapshots_include_commands_and_task_summary() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["simulation"]["max_steps"] = 1
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    decision = scheduler.regular_cycle(now=0.0)
+    simulator = Simulator(grid_map, fleet, config)
+
+    simulator.record_snapshot(scheduler=scheduler, commands=decision.commands)
+
+    snapshot = simulator.snapshots[-1]
+    assert snapshot["commands"]
+    assert {"command", "uav_id", "task_id", "target", "path", "reason"}.issubset(snapshot["commands"][0])
+    assert snapshot["tasks"]["status_counts"]["in_progress"] >= 1
+    assert "confirmations" in snapshot["tasks"]
+
+
 def test_simulator_completes_target_confirmation() -> None:
     config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["confirm_duration_steps"] = 1
@@ -61,6 +79,41 @@ def test_simulator_completes_target_confirmation() -> None:
 
     assert fleet.get_uav("uav_01").state.status != UAVStatus.CONFIRMING
     assert any("confirm_done_confirm_target_home" in snapshot["events"] for snapshot in simulator.snapshots)
+
+
+def test_simulator_resumes_search_after_confirmation_and_reaches_coverage_goal() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_2uav.yaml")
+    config["search"]["confirm_duration_steps"] = 1
+    config["simulation"]["max_steps"] = 260
+    config["simulation"]["mission_grace_steps"] = 700
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    scheduler.regular_cycle(now=0.0)
+    injector = ScenarioEventInjector(
+        [
+            {
+                "id": "target_found_no_source",
+                "time_s": 10.0,
+                "type": "TARGET_FOUND",
+                "data": {
+                    "target_id": "target_resume",
+                    "position": {"x": 20, "y": 20},
+                    "confidence": 0.9,
+                    "target_type": "person",
+                    "dwell_s": 1.0,
+                },
+            }
+        ]
+    )
+    simulator = Simulator(grid_map, fleet, config)
+
+    simulator.run(scheduler=scheduler, event_injector=injector)
+
+    latest_metrics = simulator.snapshots[-1].get("target_metrics", {})
+    assert latest_metrics["target_resume"]["success"]
+    assert latest_metrics["target_resume"]["resumed_time_s"] is not None
+    assert grid_map.coverage_rate() >= float(config["search"]["mission_complete_coverage_threshold"])
 
 
 def test_simulator_extends_for_active_return_home() -> None:
