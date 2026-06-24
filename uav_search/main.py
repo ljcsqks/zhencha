@@ -87,7 +87,6 @@ def run(
     # 步骤6: 运行仿真主循环
     # 创建仿真器，执行时间步进仿真
     simulator = Simulator(grid_map, fleet, config)
-    simulator.run_initial_decision(scheduler)
 
     # 创建场景事件注入器（用于注入预设事件，如目标发现、地图更新等）
     event_injector = ScenarioEventInjector(scenario.get("events", []))

@@ -1,4 +1,4 @@
-"""
+﻿"""
 仿真引擎模块
 
 实现了时间步进的仿真引擎，负责：
@@ -63,6 +63,8 @@ class Simulator:
         self.snapshots: list[dict[str, Any]] = []  # 存储所有时间步的快照
         self._last_events: list[str] = []  # 追踪最近处理的事件
         self._last_commands: list[DecisionCommand | ControlCommand] = []
+        self._last_advisories: list[DecisionCommand | ControlCommand] = []
+        self._last_advisory_summary: dict[str, Any] = {}
         self._last_command_acks: list[CommandAck] = []
         self._tick = 0
         self.observation_builder = ObservationBuilder(grid_map, fleet, config)
@@ -77,47 +79,44 @@ class Simulator:
         self._pending_events.append(event)
 
     def run_initial_decision(self, scheduler: Scheduler) -> None:
+        self.tick(scheduler=scheduler)
+
+    def tick(self, scheduler: Scheduler | None = None, event_injector: ScenarioEventInjector | None = None) -> None:
         self._last_events = []
         self._last_commands = []
+        self._last_advisories = []
+        self._last_advisory_summary = {}
         self._last_command_acks = []
+        if event_injector is not None:
+            for event in event_injector.emit_due(self.time_s):
+                self.enqueue_event(event)
         self._prepare_external_events()
-        algorithm = self._adapter_for(scheduler)
-        decision = algorithm.decide(self._build_observation())
-        self._last_events = list(decision.debug.get("events_handled", [])) or [event.id for event in self._current_events]
-        self._last_commands = list(decision.commands)
-        self._last_command_acks = self.command_applier.apply(decision.commands, now=self.time_s)
-        self.record_snapshot(scheduler=scheduler, commands=decision.commands)
+
+        if scheduler is not None:
+            algorithm = self._adapter_for(scheduler)
+            decision = algorithm.decide(self._build_observation())
+            self._last_events = list(decision.debug.get("events_handled", [])) or [
+                event.id for event in self._current_events
+            ]
+            self._last_commands = list(decision.commands)
+            self._last_advisories = list(decision.debug.get("conflict_advisories", []))
+            self._last_advisory_summary = dict(decision.debug.get("conflict_summary", {}))
+            self._last_command_acks.extend(self.command_applier.apply(decision.commands, now=self.time_s))
+
         self._current_events = []
+        self._advance_world()
+        self._last_command_acks.extend(self.command_applier.refresh(self.time_s))
+        self.record_snapshot(scheduler=scheduler)
         self._last_changed_cells = []
         self._tick += 1
 
     def step(self, scheduler: Scheduler | None = None, algorithm: SchedulerAlgorithmAdapter | None = None) -> None:
-        """执行一个仿真时间步
-
-        这是仿真的核心步骤，执行：
-        1. 时间推进
-        2. 无人机运动更新
-        3. 传感器覆盖标记
-        4. 决策后处理（如目标确认完成）
-
-        参数：
-            scheduler: 调度器对象，None表示仅仿真不决策
-
-        执行流程：
-            time_s += time_step_s
-            → fleet.step() 更新所有无人机位置
-            → grid_map.mark_covered() 标记传感器覆盖
-            → scheduler.update_after_step() 处理决策后逻辑
-            → record_snapshot() 记录当前状态
-        """
+        """Compatibility wrapper for callers that still use step()."""
+        self.tick(scheduler=scheduler)
+    def _advance_world(self) -> None:
         time_step_s = float(self.config["simulation"]["time_step_s"])
         self.time_s += time_step_s
-
-        # 更新所有无人机的位置（沿路径移动）
         self.fleet.step(time_step_s, self.grid_map.resolution_m)
-
-        # 标记传感器覆盖区域
-        # 每架无人机飞过的地方，其传感器覆盖范围内的栅格被标记为已搜索
         revisit_interval_s = float(self.config["search"].get("redundant_revisit_interval_s", 0.0))
         for state in self.fleet.get_all_states():
             if state.status != UAVStatus.OFFLINE:
@@ -127,26 +126,6 @@ class Simulator:
                     self.time_s,
                     redundant_revisit_interval_s=revisit_interval_s,
                 )
-
-        # 决策后处理
-        # 检查是否有需要更新状态的任务（如目标确认完成）
-        if scheduler is not None:
-            algorithm = algorithm or self._adapter_for(scheduler)
-            post_step_output = algorithm.update_after_step(self.time_s)
-            self._last_commands.extend(post_step_output.commands)
-            self._last_events.extend(post_step_output.debug.get("events_handled", []))
-            self._last_command_acks.extend(self.command_applier.apply(post_step_output.commands, now=self.time_s))
-            if scheduler.should_run_regular_cycle():
-                decision = algorithm.decide(self._build_observation())
-                self._last_commands.extend(decision.commands)
-                self._last_events.extend(decision.debug.get("events_handled", []))
-                self._last_command_acks.extend(self.command_applier.apply(decision.commands, now=self.time_s))
-
-        self._last_command_acks.extend(self.command_applier.refresh(self.time_s))
-
-        # 记录当前时间步的快照
-        self.record_snapshot(scheduler=scheduler)
-        self._tick += 1
 
     def run(
         self,
@@ -197,36 +176,7 @@ class Simulator:
                     mission_grace_used += 1
                 elif self._should_extend_for_return(return_grace_used, return_grace_steps):
                     return_grace_used += 1
-            self._last_events = []
-            self._last_commands = []
-            self._last_command_acks = []
-
-            # 决策循环（如果提供了调度器）
-            if scheduler is not None:
-                algorithm = self._adapter_for(scheduler)
-                # 步骤1: 注入场景事件
-                # 按时间将预设事件注入到事件管理器
-                if event_injector is not None:
-                    for event in event_injector.emit_due(self.time_s):
-                        self.enqueue_event(event)
-                self._prepare_external_events()
-
-                # 步骤2: 执行决策循环
-                # 如果有待处理事件，执行完整的决策流程
-                if self._current_events or scheduler.should_run_regular_cycle():
-                    decision = algorithm.decide(self._build_observation())
-                    self._last_events = list(decision.debug.get("events_handled", [])) or [
-                        event.id for event in self._current_events
-                    ]
-                    self._last_commands = list(decision.commands)
-                    self._last_command_acks = self.command_applier.apply(decision.commands, now=self.time_s)
-                self._current_events = []
-
-            # 步骤3: 推进仿真一个时间步
-            self.step(scheduler=scheduler, algorithm=self._scheduler_adapter)
-
-            # 步骤4: 检查终止条件
-            # 如果所有无人机都空闲或离线，提前结束
+            self.tick(scheduler=scheduler, event_injector=event_injector)
             if all(state.status in (UAVStatus.IDLE, UAVStatus.OFFLINE) for state in self.fleet.get_all_states()):
                 break
 
@@ -331,6 +281,8 @@ class Simulator:
                     _command_to_snapshot(command)
                     for command in (commands if commands is not None else self._last_commands)
                 ],
+                "advisories": [_command_to_snapshot(command) for command in self._last_advisories],
+                "advisory_summary": dict(self._last_advisory_summary),
                 "command_acks": [_ack_to_snapshot(ack) for ack in self._last_command_acks],
                 "changed_cells": [asdict(cell) for cell in self._last_changed_cells],
                 "uavs": [
@@ -381,6 +333,7 @@ class Simulator:
 
 
 def _command_to_snapshot(command: DecisionCommand | ControlCommand) -> dict[str, Any]:
+    advisory = bool(command.metadata.get("advisory") is True or command.metadata.get("effect") == "none")
     return {
         "command_id": command.command_id,
         "command": command.command.value,
@@ -392,6 +345,8 @@ def _command_to_snapshot(command: DecisionCommand | ControlCommand) -> dict[str,
         "issued_at": command.issued_at,
         "ttl_s": command.ttl_s,
         "metadata": dict(command.metadata),
+        "advisory": advisory,
+        "executable": not advisory,
     }
 
 
@@ -405,3 +360,4 @@ def _ack_to_snapshot(ack: CommandAck) -> dict[str, Any]:
         "reason": ack.reason,
         "progress": ack.progress,
     }
+

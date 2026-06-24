@@ -211,7 +211,7 @@ def test_confirmation_done_resumes_interrupted_search_task() -> None:
 
     assert "confirm_done_confirm_target_001" in events
     assert any(command.reason == "resume_interrupted_search" for command in commands)
-    assert scheduler.task_manager.tasks[interrupted_task_id].status == TaskStatus.IN_PROGRESS
+    assert scheduler.task_manager.tasks[interrupted_task_id].status == TaskStatus.ASSIGNED
     assert fleet.get_uav("uav_01").state.status == UAVStatus.SEARCHING
 
 

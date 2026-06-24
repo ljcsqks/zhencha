@@ -107,6 +107,7 @@ class Scheduler:
         self._target_metrics: dict[str, dict[str, Any]] = {}
         self._issued_commands: dict[str, ControlCommand] = {}
         self._handled_command_ack_keys: set[tuple[str, str, float]] = set()
+        self._ack_events_handled: list[str] = []
         self._initialized = False  # 标记是否已生成初始任务
         self._supplemental_task_seq = 0
         self.replan_count = 0
@@ -142,7 +143,9 @@ class Scheduler:
         for command in commands:
             self._issued_commands[command.command_id] = command
 
-    def handle_command_acks(self, command_acks: list[CommandAck]) -> None:
+    def handle_command_acks(self, command_acks: list[CommandAck]) -> list[DecisionCommand]:
+        commands: list[DecisionCommand] = []
+        self._ack_events_handled = []
         for ack in command_acks:
             key = (ack.command_id, ack.status.value, ack.updated_at)
             if key in self._handled_command_ack_keys:
@@ -153,8 +156,27 @@ class Scheduler:
                 continue
             if ack.status in (AckStatus.REJECTED, AckStatus.FAILED, AckStatus.CANCELLED):
                 self._handle_command_not_executed(command, ack)
+            elif ack.status in (AckStatus.ACCEPTED, AckStatus.RUNNING):
+                self._handle_command_started(command, ack)
             elif ack.status == AckStatus.COMPLETED:
-                self._handle_command_completed(command, ack)
+                commands.extend(self._handle_command_completed(command, ack))
+        return commands
+
+    def pop_ack_events_handled(self) -> list[str]:
+        events = list(self._ack_events_handled)
+        self._ack_events_handled = []
+        return events
+
+    def _handle_command_started(self, command: ControlCommand, ack: CommandAck) -> None:
+        if command.command == CommandType.CONFIRM_TARGET and command.task_id in self._confirmations:
+            self._confirmations[command.task_id]["status"] = "CONFIRMING"
+            return
+        if command.task_id is None or command.task_id not in self.task_manager.tasks:
+            return
+        task = self.task_manager.tasks[command.task_id]
+        if command.command in (CommandType.FOLLOW_PATH, CommandType.REPLAN) and task.type == TaskType.SEARCH:
+            if task.status == TaskStatus.ASSIGNED:
+                self.task_manager.start_task(task.id, now=ack.updated_at)
 
     def _handle_command_not_executed(self, command: ControlCommand, ack: CommandAck) -> None:
         if command.command == CommandType.CONFIRM_TARGET:
@@ -170,14 +192,36 @@ class Scheduler:
         elif task.status == TaskStatus.ASSIGNED:
             self.task_manager.mark_blocked(task.id, now=ack.updated_at)
 
-    def _handle_command_completed(self, command: ControlCommand, ack: CommandAck) -> None:
+    def _handle_command_completed(self, command: ControlCommand, ack: CommandAck) -> list[DecisionCommand]:
+        if command.command == CommandType.CONFIRM_TARGET:
+            return self._complete_confirmation_from_ack(command, ack)
         if command.command == CommandType.RETURN_HOME:
-            return
+            return []
         if command.task_id is None or command.task_id not in self.task_manager.tasks:
-            return
+            return []
         task = self.task_manager.tasks[command.task_id]
-        if task.type == TaskType.SEARCH and task.status == TaskStatus.ASSIGNED:
-            self.task_manager.start_task(task.id, now=ack.updated_at)
+        if task.type == TaskType.SEARCH and task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            self.task_manager.complete_task(task.id, now=ack.updated_at)
+        return []
+
+    def _complete_confirmation_from_ack(self, command: ControlCommand, ack: CommandAck) -> list[DecisionCommand]:
+        task_id = command.task_id or ""
+        confirmation = self._confirmations.get(task_id)
+        target_id = str(
+            (confirmation or {}).get("target_id")
+            or command.metadata.get("target_id")
+            or task_id.removeprefix("confirm_")
+        )
+        event = Event(
+            id=f"confirm_done_{task_id}",
+            type=EventType.CONFIRM_DONE,
+            timestamp=ack.updated_at,
+            priority=EventPriority.NORMAL,
+            source_uav_id=command.uav_id,
+            data={"task_id": task_id, "target_id": target_id},
+        )
+        self._ack_events_handled.append(event.id)
+        return self._handle_confirm_done(event)
 
     def _fail_confirmation_from_ack(self, command: ControlCommand, ack: CommandAck) -> None:
         confirmation = self._confirmations.pop(command.task_id or "", None)
@@ -284,7 +328,6 @@ class Scheduler:
                 continue
 
             # 路径规划成功，更新任务和无人机状态
-            self.task_manager.start_task(task.id, now=now)
             assignments.append(assignment)
             commands.append(
                 DecisionCommand(
@@ -1110,28 +1153,9 @@ class Scheduler:
         参数：
             event: 离线事件对象
 
-        返回：
-            list[DecisionCommand]: 包含HOLD指令的列表
-
-        处理流程：
-            1. 将无人机状态切换为OFFLINE
-            2. 标记为不可用
-            3. 清空当前路径
-            4. 其未完成任务会在下一轮拍卖中重新分配
+        物理离线状态由 Simulator 在构建 Observation 前应用；算法层不再向离线 UAV 下发 HOLD。
         """
-        if event.source_uav_id is None:
-            return []
-        uav = self.fleet.get_uav(event.source_uav_id).state
-        return [
-            DecisionCommand(
-                uav_id=uav.id,
-                command=CommandType.HOLD,
-                task_id=uav.current_task_id,
-                target=None,
-                path=[],
-                reason="uav_offline",
-            )
-        ]
+        return []
 
     def _handle_map_update(self, event: Event) -> list[DecisionCommand]:
         """处理地图更新事件
@@ -1615,7 +1639,6 @@ class Scheduler:
 
         self._set_task_coverage_waypoints(task, waypoints, now)
         assignment = self.task_manager.assign_task(task.id, uav.id, now=now, bid_value=0.0)
-        self.task_manager.start_task(task.id, now=now)
         task.resume_owner_id = None
         target_id = str(confirmation.get("target_id", ""))
         if target_id in self._target_metrics:

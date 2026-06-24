@@ -101,6 +101,10 @@ class CommandApplier:
         if invalid:
             return self._ack(command, AckStatus.REJECTED, now, "path_not_passable")
         state = self.fleet.get_uav(command.uav_id).state
+        if self._distance_cells(command.path[0], state.position) > 1.0:
+            return self._ack(command, AckStatus.REJECTED, now, "path_start_not_at_uav")
+        if not self._is_contiguous(command.path):
+            return self._ack(command, AckStatus.REJECTED, now, "path_not_contiguous")
         state.current_task_id = command.task_id
         self.fleet.assign_path(command.uav_id, list(command.path), status=status)
         self._active_by_uav[command.uav_id] = command
@@ -158,6 +162,14 @@ class CommandApplier:
         if path_length <= 1:
             return None
         return max(0.0, min(1.0, path_index / (path_length - 1)))
+
+    @staticmethod
+    def _distance_cells(first, second) -> float:
+        return max(abs(first.x - second.x), abs(first.y - second.y))
+
+    @classmethod
+    def _is_contiguous(cls, path) -> bool:
+        return all(cls._distance_cells(first, second) <= 1.0 for first, second in zip(path, path[1:]))
 
     @staticmethod
     def _status_from_metadata(command: ControlCommand) -> UAVStatus | None:

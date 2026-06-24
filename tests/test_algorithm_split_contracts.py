@@ -37,6 +37,7 @@ def test_command_applier_cancel_command_cancels_specific_or_active_command() -> 
     grid_map = build_grid_map(config)
     fleet = FleetManager.from_config(config, config["scenario"])
     applier = CommandApplier(fleet, grid_map)
+    start = fleet.get_uav("uav_01").state.position
     follow = ControlCommand(
         command_id="cmd_follow",
         command=CommandType.FOLLOW_PATH,
@@ -304,3 +305,214 @@ def test_confirm_target_rejected_ack_marks_confirmation_failed() -> None:
     assert metrics["success"] is False
     assert metrics["failed_time_s"] == 1.0
     assert not scheduler.task_status_snapshot()["confirmations"]
+
+
+def test_simulator_tick_injects_target_found_through_observation_events() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    simulator = Simulator(grid_map, fleet, config)
+    injector = ScenarioEventInjector(
+        [
+            {
+                "id": "target_found_tick",
+                "time_s": 0.0,
+                "type": "TARGET_FOUND",
+                "data": {
+                    "target_id": "target_tick",
+                    "position": {"x": 5, "y": 5},
+                    "confidence": 0.9,
+                    "target_type": "person",
+                },
+            }
+        ]
+    )
+
+    simulator.tick(scheduler=scheduler, event_injector=injector)
+
+    assert any("target_found_tick" in snapshot["events"] for snapshot in simulator.snapshots)
+    assert any(
+        command["command"] == CommandType.CONFIRM_TARGET.value
+        for snapshot in simulator.snapshots
+        for command in snapshot["commands"]
+    )
+
+
+def test_web_style_enqueue_event_then_tick_triggers_confirm_command() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    simulator = Simulator(grid_map, fleet, config)
+    event = ScenarioEventInjector(
+        [
+            {
+                "id": "target_found_step",
+                "time_s": 0.0,
+                "type": "TARGET_FOUND",
+                "data": {
+                    "target_id": "target_step",
+                    "position": {"x": 5, "y": 5},
+                    "confidence": 0.9,
+                    "target_type": "person",
+                },
+            }
+        ]
+    ).emit_due(0.0)[0]
+
+    simulator.enqueue_event(event)
+    simulator.tick(scheduler=scheduler)
+
+    assert simulator.snapshots[-1]["events"] == ["target_found_step"]
+    assert any(command["command"] == CommandType.CONFIRM_TARGET.value for command in simulator.snapshots[-1]["commands"])
+
+
+def test_confirm_target_completed_ack_drives_confirm_done_and_search_resume() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_2uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    adapter = SchedulerAlgorithmAdapter(scheduler)
+    builder = ObservationBuilder(grid_map, fleet, config)
+    applier = CommandApplier(fleet, grid_map)
+
+    initial = adapter.decide(builder.build(tick=0, time_s=0.0))
+    applier.apply(initial.commands, now=0.0)
+    target_event = ScenarioEventInjector(
+        [
+            {
+                "id": "target_found_ack_done",
+                "time_s": 1.0,
+                "type": "TARGET_FOUND",
+                "data": {
+                    "target_id": "target_ack_done",
+                    "position": {"x": 20, "y": 20},
+                    "confidence": 0.9,
+                    "target_type": "person",
+                },
+            }
+        ]
+    ).emit_due(1.0)[0]
+    confirm_output = adapter.decide(builder.build(tick=1, time_s=1.0, events=[target_event]))
+    confirm = next(command for command in confirm_output.commands if command.command == CommandType.CONFIRM_TARGET)
+    completed = CommandAck(
+        command_id=confirm.command_id,
+        uav_id=confirm.uav_id,
+        status=AckStatus.COMPLETED,
+        issued_at=confirm.issued_at,
+        updated_at=2.0,
+        reason="path_completed",
+        progress=1.0,
+    )
+
+    done_output = adapter.decide(builder.build(tick=2, time_s=2.0, command_acks=[completed]))
+
+    metrics = scheduler.target_metrics_snapshot()["target_ack_done"]
+    assert metrics["success"] is True
+    assert metrics["done_time_s"] == 2.0
+    assert not scheduler.task_status_snapshot()["confirmations"]
+    assert any(command.command == CommandType.FOLLOW_PATH for command in done_output.commands)
+
+
+def test_scheduler_adapter_no_longer_calls_update_after_step() -> None:
+    source = Path("uav_search/core/scheduler_adapter.py").read_text(encoding="utf-8")
+
+    assert "scheduler.update_after_step" not in source
+
+
+def test_command_applier_rejects_bad_path_geometry() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    applier = CommandApplier(fleet, grid_map)
+    start = fleet.get_uav("uav_01").state.position
+    bad_start = ControlCommand(
+        command_id="cmd_bad_start",
+        command=CommandType.FOLLOW_PATH,
+        uav_id="uav_01",
+        task_id="task_bad",
+        target=Position(3, 0),
+        path=[Position(3, 0), Position(4, 0)],
+        issued_at=0.0,
+    )
+    discontinuous = ControlCommand(
+        command_id="cmd_jump",
+        command=CommandType.FOLLOW_PATH,
+        uav_id="uav_01",
+        task_id="task_bad",
+        target=Position(10, 10),
+        path=[start, Position(start.x + 10, start.y)],
+        issued_at=0.0,
+    )
+
+    start_ack = applier.apply([bad_start], now=0.0)[0]
+    jump_ack = applier.apply([discontinuous], now=0.0)[0]
+
+    assert start_ack.status == AckStatus.REJECTED
+    assert start_ack.reason == "path_start_not_at_uav"
+    assert jump_ack.status == AckStatus.REJECTED
+    assert jump_ack.reason == "path_not_contiguous"
+
+
+def test_snapshot_distinguishes_executable_commands_from_advisories() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    simulator = Simulator(grid_map, fleet, config)
+    advisory = ControlCommand(
+        command_id="cmd_advisory",
+        command=CommandType.CONFLICT_YIELD,
+        uav_id="uav_01",
+        task_id=None,
+        target=None,
+        path=[],
+        issued_at=0.0,
+        reason="conflict_time_offset",
+        metadata={"advisory": True, "effect": "none"},
+    )
+    executable = ControlCommand(
+        command_id="cmd_hold",
+        command=CommandType.HOLD,
+        uav_id="uav_01",
+        task_id=None,
+        target=None,
+        path=[],
+        issued_at=0.0,
+        reason="test_hold",
+    )
+
+    simulator.record_snapshot(commands=[advisory, executable])
+
+    commands = simulator.snapshots[-1]["commands"]
+    assert commands[0]["advisory"] is True
+    assert commands[0]["executable"] is False
+    assert commands[1]["advisory"] is False
+    assert commands[1]["executable"] is True
+
+
+def test_run_matches_repeated_tick_for_key_state() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["simulation"]["max_steps"] = 6
+    config["simulation"]["mission_grace_steps"] = 0
+
+    run_map = build_grid_map(config)
+    run_fleet = FleetManager.from_config(config, config["scenario"])
+    run_scheduler = Scheduler(run_map, run_fleet, config)
+    run_simulator = Simulator(run_map, run_fleet, config)
+    run_simulator.run(max_steps=6, scheduler=run_scheduler)
+
+    tick_map = build_grid_map(config)
+    tick_fleet = FleetManager.from_config(config, config["scenario"])
+    tick_scheduler = Scheduler(tick_map, tick_fleet, config)
+    tick_simulator = Simulator(tick_map, tick_fleet, config)
+    for _ in range(6):
+        tick_simulator.tick(scheduler=tick_scheduler)
+        if all(state.status in (UAVStatus.IDLE, UAVStatus.OFFLINE) for state in tick_fleet.get_all_states()):
+            break
+
+    assert tick_simulator.snapshots[-1]["time_s"] == run_simulator.snapshots[-1]["time_s"]
+    assert tick_map.coverage_rate() == run_map.coverage_rate()
+    assert [state.position for state in tick_fleet.get_all_states()] == [
+        state.position for state in run_fleet.get_all_states()
+    ]

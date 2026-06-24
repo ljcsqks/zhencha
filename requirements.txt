@@ -2,3 +2,6 @@ numpy
 matplotlib
 pyyaml
 pytest
+fastapi
+uvicorn[standard]
+httpx2

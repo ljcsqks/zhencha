@@ -45,7 +45,7 @@ def test_snapshots_include_commands_and_task_summary() -> None:
     snapshot = simulator.snapshots[-1]
     assert snapshot["commands"]
     assert {"command", "uav_id", "task_id", "target", "path", "reason"}.issubset(snapshot["commands"][0])
-    assert snapshot["tasks"]["status_counts"]["in_progress"] >= 1
+    assert snapshot["tasks"]["status_counts"]["assigned"] >= 1
     assert "confirmations" in snapshot["tasks"]
 
 
