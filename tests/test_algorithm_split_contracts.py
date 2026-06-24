@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+import pytest
 
 from uav_search.core.config import load_config
 from uav_search.core.contracts import AckStatus, CommandAck, CommandStatusStore, ControlCommand
@@ -150,7 +151,8 @@ def test_initial_snapshot_commands_are_control_commands_with_matching_acks() -> 
     scheduler = Scheduler(grid_map, fleet, config)
     simulator = Simulator(grid_map, fleet, config)
 
-    simulator.run_initial_decision(scheduler)
+    with pytest.warns(DeprecationWarning):
+        simulator.run_initial_decision(scheduler)
 
     snapshot = simulator.snapshots[0]
     assert snapshot["commands"]

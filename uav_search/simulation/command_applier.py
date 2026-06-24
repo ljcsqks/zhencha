@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from dataclasses import asdict
 from typing import Any
 
 from uav_search.core.contracts import AckStatus, CommandAck, CommandStatusStore, ControlCommand
@@ -22,6 +23,29 @@ class CommandApplier:
 
     def recent_acks(self, now: float) -> list[CommandAck]:
         return self.ack_store.recent(now)
+
+    def active_commands_snapshot(self) -> list[dict[str, Any]]:
+        snapshots: list[dict[str, Any]] = []
+        for uav_id, command in self._active_by_uav.items():
+            try:
+                state = self.fleet.get_uav(uav_id).state
+            except KeyError:
+                continue
+            remaining_path = state.path[state.path_index :] if state.path else []
+            snapshots.append(
+                {
+                    "uav_id": uav_id,
+                    "command_id": command.command_id,
+                    "command": command.command.value,
+                    "task_id": command.task_id,
+                    "path": [asdict(point) for point in command.path],
+                    "remaining_path": [asdict(point) for point in remaining_path],
+                    "progress": self._progress(state.path_index, len(state.path)),
+                    "issued_at": command.issued_at,
+                    "metadata": dict(command.metadata),
+                }
+            )
+        return snapshots
 
     def apply(self, commands: list[ControlCommand], now: float) -> list[CommandAck]:
         acks: list[CommandAck] = []

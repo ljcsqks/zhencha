@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -73,12 +74,18 @@ class Simulator:
         self._pending_events: list[Event] = []
         self._current_events: list[Event] = []
         self._last_changed_cells: list[Position] = []
+        self._last_coverage_changed_cells: list[dict[str, Any]] = []
         self.map_updater = MapUpdater(grid_map)
 
     def enqueue_event(self, event: Event) -> None:
         self._pending_events.append(event)
 
     def run_initial_decision(self, scheduler: Scheduler) -> None:
+        warnings.warn(
+            "Simulator.run_initial_decision() is deprecated; call Simulator.tick() through the runtime path instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.tick(scheduler=scheduler)
 
     def tick(self, scheduler: Scheduler | None = None, event_injector: ScenarioEventInjector | None = None) -> None:
@@ -87,6 +94,7 @@ class Simulator:
         self._last_advisories = []
         self._last_advisory_summary = {}
         self._last_command_acks = []
+        self._last_coverage_changed_cells = []
         if event_injector is not None:
             for event in event_injector.emit_due(self.time_s):
                 self.enqueue_event(event)
@@ -108,6 +116,7 @@ class Simulator:
         self._last_command_acks.extend(self.command_applier.refresh(self.time_s))
         self.record_snapshot(scheduler=scheduler)
         self._last_changed_cells = []
+        self._last_coverage_changed_cells = []
         self._tick += 1
 
     def step(self, scheduler: Scheduler | None = None, algorithm: SchedulerAlgorithmAdapter | None = None) -> None:
@@ -118,6 +127,8 @@ class Simulator:
         self.time_s += time_step_s
         self.fleet.step(time_step_s, self.grid_map.resolution_m)
         revisit_interval_s = float(self.config["search"].get("redundant_revisit_interval_s", 0.0))
+        previous_coverage = self.grid_map.coverage_count.copy()
+        previous_confidence = self.grid_map.search_confidence.copy()
         for state in self.fleet.get_all_states():
             if state.status != UAVStatus.OFFLINE:
                 self.grid_map.mark_covered(
@@ -126,6 +137,22 @@ class Simulator:
                     self.time_s,
                     redundant_revisit_interval_s=revisit_interval_s,
                 )
+        self._last_coverage_changed_cells = self._coverage_patch(previous_coverage, previous_confidence)
+
+    def _coverage_patch(self, previous_coverage, previous_confidence) -> list[dict[str, Any]]:
+        changed_mask = (self.grid_map.coverage_count != previous_coverage) | (
+            self.grid_map.search_confidence != previous_confidence
+        )
+        ys, xs = changed_mask.nonzero()
+        return [
+            {
+                "x": int(x),
+                "y": int(y),
+                "coverage_count": int(self.grid_map.coverage_count[y, x]),
+                "search_confidence": float(self.grid_map.search_confidence[y, x]),
+            }
+            for y, x in zip(ys, xs)
+        ]
 
     def run(
         self,
@@ -285,6 +312,8 @@ class Simulator:
                 "advisory_summary": dict(self._last_advisory_summary),
                 "command_acks": [_ack_to_snapshot(ack) for ack in self._last_command_acks],
                 "changed_cells": [asdict(cell) for cell in self._last_changed_cells],
+                "coverage_changed_cells": list(self._last_coverage_changed_cells),
+                "active_commands": self.command_applier.active_commands_snapshot(),
                 "uavs": [
                     {
                         "id": state.id,

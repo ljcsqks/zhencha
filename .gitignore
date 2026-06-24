@@ -3,6 +3,14 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+/runs
 .vscode/
 .venv/
 venv/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts

@@ -1,3 +1,5 @@
+import pytest
+
 from uav_search.core.config import load_config
 from uav_search.core.data_types import CellType, Position, UAVStatus
 from uav_search.core.scheduler import Scheduler
@@ -40,7 +42,8 @@ def test_snapshots_include_commands_and_task_summary() -> None:
     scheduler = Scheduler(grid_map, fleet, config)
     simulator = Simulator(grid_map, fleet, config)
 
-    simulator.run_initial_decision(scheduler)
+    with pytest.warns(DeprecationWarning):
+        simulator.run_initial_decision(scheduler)
 
     snapshot = simulator.snapshots[-1]
     assert snapshot["commands"]
