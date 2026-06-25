@@ -152,6 +152,7 @@ def test_segment_diagnostics_read_command_metadata() -> None:
 
     segment_quality = diagnostics["segment_quality"]
     assert segment_quality["segment_count_total"] == 3
+    assert segment_quality["unique_segment_count"] == 3
     assert segment_quality["segment_count_per_uav"] == {"uav_01": 2, "uav_02": 1}
     assert segment_quality["estimated_connector_cost_per_uav"] == {"uav_01": 30.0, "uav_02": 10.0}
     assert segment_quality["max_segment_bundle_cost"] == 130.0
@@ -197,3 +198,4 @@ def test_segment_diagnostics_deduplicate_replanned_segment_ids() -> None:
     diagnostics = compute_diagnostics(GridMap(width_m=200, height_m=200, resolution_m=10), _fleet(), snapshots)
 
     assert diagnostics["segment_quality"]["segment_count_total"] == 2
+    assert diagnostics["segment_quality"]["unique_segment_count"] == 2

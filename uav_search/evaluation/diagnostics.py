@@ -214,6 +214,7 @@ def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     return {
         "segment_count_total": sum(segment_count_per_uav.values()),
+        "unique_segment_count": sum(segment_count_per_uav.values()),
         "segment_count_per_uav": segment_count_per_uav,
         "estimated_connector_cost_per_uav": connector_cost_per_uav,
         "estimated_sweep_cost_per_uav": sweep_cost_per_uav,

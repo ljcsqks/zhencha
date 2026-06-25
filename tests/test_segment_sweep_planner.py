@@ -49,6 +49,33 @@ def test_segment_generation_splits_at_obstacles_and_keeps_segments_passable() ->
     assert all(segment.allowed_uav_ids == {"uav_01"} for segment in segments)
 
 
+def test_segment_generation_does_not_duplicate_segment_identity() -> None:
+    grid_map = GridMap(width_m=120, height_m=80, resolution_m=10)
+    uavs = [_uav("uav_01", Position(0, 0))]
+    reachability = build_reachability_index(grid_map, uavs)
+    planner = SegmentSweepPlanner({})
+
+    segments = planner.generate_segments(
+        searchable_cells=set(grid_map.get_searchable_cells()),
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=1,
+        reachability=reachability,
+    )
+    identities = [
+        (
+            segment.component_id,
+            segment.orientation,
+            segment.line_index,
+            segment.start,
+            segment.end,
+        )
+        for segment in segments
+    ]
+
+    assert len(identities) == len(set(identities))
+
+
 def test_segment_sweep_initial_tasks_are_preassigned_bundles_with_metadata() -> None:
     grid_map = GridMap(width_m=120, height_m=60, resolution_m=10)
     uavs = [_uav("uav_01", Position(0, 1)), _uav("uav_02", Position(0, 4))]
@@ -68,4 +95,6 @@ def test_segment_sweep_initial_tasks_are_preassigned_bundles_with_metadata() -> 
     assert all(task.coverage_waypoints for task in tasks)
     assert all(task.metadata["planner_version"] == "segment_sweep_v1" for task in tasks)
     assert sum(task.metadata["segment_count"] for task in tasks) > 0
+    for task in tasks:
+        assert len(task.metadata["segment_ids"]) == len(set(task.metadata["segment_ids"]))
     assert len({tuple(task.coverage_waypoints) for task in tasks}) == len(tasks)

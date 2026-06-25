@@ -461,6 +461,7 @@ def _export_summary(
         "unreachable_cells_count": _nested_metric(metrics, ["diagnostics", "coverage_quality", "unreachable_cells_count"], 0),
         "unreachable_components_count": _nested_metric(metrics, ["diagnostics", "coverage_quality", "unreachable_components_count"], 0),
         "segment_count_total": _nested_metric(metrics, ["diagnostics", "segment_quality", "segment_count_total"], 0),
+        "unique_segment_count": _nested_metric(metrics, ["diagnostics", "segment_quality", "unique_segment_count"], 0),
         "segment_workload_balance": _nested_metric(metrics, ["diagnostics", "segment_quality", "segment_workload_balance"], 1.0),
         "estimated_connector_cost_per_uav": _nested_metric(metrics, ["diagnostics", "segment_quality", "estimated_connector_cost_per_uav"], {}),
         "idle_time_ratio": _idle_time_ratio(metrics.get("diagnostics", {})),

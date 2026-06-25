@@ -20,6 +20,7 @@ DELTA_FIELDS = {
     "workload_balance_delta": ("diagnostics.allocation_quality.workload_balance_all_uavs", "diff"),
     "workload_balance_active_delta": ("diagnostics.allocation_quality.workload_balance_active_uavs", "diff"),
     "segment_count_delta": ("diagnostics.segment_quality.segment_count_total", "diff"),
+    "unique_segment_count_delta": ("diagnostics.segment_quality.unique_segment_count", "diff"),
     "segment_workload_balance_delta": ("diagnostics.segment_quality.segment_workload_balance", "diff"),
     "turn_rate_delta": ("turn_rate", "diff"),
     "no_fly_violations_delta": ("no_fly_violations", "diff"),
@@ -118,8 +119,8 @@ def _write_markdown(path: Path, comparison: dict[str, Any]) -> None:
         f"- Baseline: `{comparison['baseline_version']}`",
         f"- Candidate: `{comparison['candidate_version']}`",
         "",
-        "| Scenario | Coverage Δ | Time95 Δ% | Distance Δ% | Redundant Δ% | Workload Δ | No-fly Δ |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Scenario | Coverage delta | Time95 delta % | Distance delta % | Redundant delta % | Workload delta | Unique segments delta | No-fly delta |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for scenario, deltas in comparison["scenarios"].items():
         lines.append(
@@ -128,6 +129,7 @@ def _write_markdown(path: Path, comparison: dict[str, Any]) -> None:
             f"{deltas['total_distance_delta_pct']:.6f} | "
             f"{deltas['redundant_coverage_delta_pct']:.6f} | "
             f"{deltas['workload_balance_delta']:.6f} | "
+            f"{deltas['unique_segment_count_delta']:.6f} | "
             f"{deltas['no_fly_violations_delta']:.6f} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
