@@ -320,6 +320,7 @@ class Simulator:
                         "position": asdict(state.position),
                         "status": state.status.value,
                         "battery": state.battery,
+                        "sensor_radius_cells": state.sensor_radius_cells,
                         "task_id": state.current_task_id,
                         "total_distance_m": state.total_distance_m,
                         "effective_search_distance_m": state.effective_search_distance_m,

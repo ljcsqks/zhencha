@@ -2,6 +2,15 @@
 
 Phase 8 starts the algorithm optimization track. Phase 8a establishes versioning, diagnostics, A/B comparison, and stress scenarios. It does not change search planning behavior.
 
+Phase 8b-1 hardens the baseline before segment planning:
+
+- Build a reachability index from UAV positions over passable cells.
+- Exclude cells unreachable by all online UAVs from ordinary search task generation.
+- Attach `allowed_uav_ids` to tasks when only a subset of UAVs can reach a region.
+- Use A* distance in auction bids when `auction.use_astar_for_bid` is enabled.
+- Cache blocked supplemental regions with a TTL so unreachable holes are not regenerated every tick.
+- Split diagnostics into all-UAV workload balance, active-UAV workload balance, logical connector metrics, and post-95 search/return/confirm distance.
+
 ## Algorithm Versions
 
 Current version:
@@ -34,10 +43,12 @@ Efficiency:
 - In the 5 UAV scenario, `total_distance_m` improves by at least 15% versus baseline.
 - In the 5 UAV scenario, `redundant_coverage_rate` drops below 35%.
 - `post_95_extra_distance_m` improves by at least 30%.
+- `post_95_search_distance_m` is the primary efficiency signal; return-home distance is reported separately.
 
 Coordination:
 
-- `per_uav_workload_balance >= 0.92`.
+- `workload_balance_all_uavs >= 0.92`.
+- `workload_balance_active_uavs` is tracked separately to distinguish true balance from idle-aircraft masking.
 - The 5 UAV scenario should be meaningfully faster than 4 UAV; at minimum, its `time_to_95_coverage_s` must not be worse.
 
 Safety:
@@ -65,10 +76,12 @@ Recommended implementation path:
 
 Primary diagnostics to watch:
 
-- `route_quality.max_connector_length`
-- `route_quality.long_connector_count`
-- `allocation_quality.workload_balance`
-- `coverage_quality.post_95_distance_m`
+- `route_quality.max_logical_connector_length`
+- `route_quality.long_logical_connector_count`
+- `allocation_quality.workload_balance_all_uavs`
+- `allocation_quality.fleet_idle_time_ratio`
+- `coverage_quality.post_95_search_distance_m`
+- `coverage_quality.unreachable_cells_count`
 - `per_uav.*.average_coverage_gain_per_meter`
 
 ## Phase 8c: Balanced Segment Sweep V2
@@ -98,7 +111,8 @@ For Phase 8a, candidate may intentionally equal baseline. The expected deltas ar
 ## Stress Scenarios
 
 - `stress_obstacle_maze_3uav`: route quality around narrow passages.
-- `stress_fragmented_area_4uav`: allocation balance across disconnected fragments.
+- `stress_fragmented_area_4uav`: unreachable-area diagnostics across disconnected fragments.
+- `stress_fragmented_area_4uav_reachable`: allocation balance across fragmented but physically reachable regions.
 - `stress_5uav_balance`: 5 UAV coordination and diminishing returns.
 - `stress_target_confirm_mid_search`: target confirmation disruption during search.
 - `stress_dynamic_obstacle_mid_route`: local replanning while following long paths.

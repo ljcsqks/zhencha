@@ -42,6 +42,7 @@ def build_state(
         "advisory_summary": latest.get("advisory_summary", {}),
         "tasks": scheduler.task_status_snapshot(),
         "targets": scheduler.target_metrics_snapshot(),
+        "diagnostics": {"reachability": scheduler.reachability_diagnostics()},
         "changed_cells": latest.get("changed_cells", []),
         "coverage_changed_cells": latest.get("coverage_changed_cells", []),
         "active_commands": latest.get("active_commands", []),

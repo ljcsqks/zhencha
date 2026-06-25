@@ -14,9 +14,10 @@ def generate_initial_tasks(
     home: Position,
     origins: list[Position] | None = None,
     created_at: float = 0.0,
+    searchable_cells: set[Position] | None = None,
 ) -> list[Task]:
     task_origins = origins or [home]
-    searchable_cells = set(grid_map.get_searchable_cells())
+    searchable_cells = set(searchable_cells) if searchable_cells is not None else set(grid_map.get_searchable_cells())
     assigned_regions = (
         _partition_cells_by_origins(searchable_cells, task_origins, grid_map, sensor_radius_cells)
         if task_origins

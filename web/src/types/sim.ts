@@ -21,6 +21,7 @@ export interface UavState {
   position: GridPosition;
   status: string;
   battery: number;
+  sensor_radius_cells?: number;
   task_id?: string | null;
   total_distance_m?: number;
   effective_search_distance_m?: number;
@@ -86,6 +87,7 @@ export interface SimulationState {
   advisory_summary: Record<string, unknown>;
   tasks: Record<string, unknown>;
   targets: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
   changed_cells: GridPosition[];
   coverage_changed_cells?: Array<GridPosition & { coverage_count: number; search_confidence?: number }>;
   active_commands?: ActiveCommandSnapshot[];

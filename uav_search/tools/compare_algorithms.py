@@ -16,7 +16,9 @@ DELTA_FIELDS = {
     "total_distance_delta_pct": ("total_distance_m", "pct"),
     "redundant_coverage_delta_pct": ("redundant_coverage_rate", "pct"),
     "post_95_extra_distance_delta_pct": ("post_95_extra_distance_m", "pct"),
-    "workload_balance_delta": ("per_uav_workload_balance", "diff"),
+    "post_95_search_distance_delta_pct": ("diagnostics.coverage_quality.post_95_search_distance_m", "pct"),
+    "workload_balance_delta": ("diagnostics.allocation_quality.workload_balance_all_uavs", "diff"),
+    "workload_balance_active_delta": ("diagnostics.allocation_quality.workload_balance_active_uavs", "diff"),
     "turn_rate_delta": ("turn_rate", "diff"),
     "no_fly_violations_delta": ("no_fly_violations", "diff"),
     "confirm_success_rate_delta": ("confirm_success_rate", "diff"),
@@ -75,7 +77,11 @@ def _delta(baseline: float | None, candidate: float | None, mode: str) -> float:
 
 
 def _value(row: dict[str, Any], field: str) -> float | None:
-    value = row.get(field)
+    value: Any = row
+    for part in field.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
     if value in ("", None):
         return None
     return float(value)

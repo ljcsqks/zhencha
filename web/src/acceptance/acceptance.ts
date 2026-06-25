@@ -15,15 +15,20 @@ export function evaluateAcceptance(state: SimulationState | undefined, commandLo
   const diagnostics = isRecord(metrics.diagnostics) ? metrics.diagnostics : {};
   const routeQuality = isRecord(diagnostics.route_quality) ? diagnostics.route_quality : {};
   const allocationQuality = isRecord(diagnostics.allocation_quality) ? diagnostics.allocation_quality : {};
+  const coverageQuality = isRecord(diagnostics.coverage_quality) ? diagnostics.coverage_quality : {};
   const targets = state?.targets || {};
   const hasTargets = Object.keys(targets).length > 0 || Number(metrics.target_found_count || 0) > 0;
   const rejectedCount = commandLog.filter((entry) => ["rejected", "failed"].includes(String(entry.ack_status || ""))).length;
   const confirmFailedCount = Object.values(targets).filter((target) => isRecord(target) && target.success === false).length;
-  const workloadBalance = Number(allocationQuality.workload_balance ?? metrics.per_uav_workload_balance ?? 0);
+  const workloadBalance = Number(allocationQuality.workload_balance_all_uavs ?? allocationQuality.workload_balance ?? metrics.per_uav_workload_balance ?? 0);
   const redundantCoverage = Number(metrics.redundant_coverage_rate ?? 0);
   const post95Distance = Number(metrics.post_95_extra_distance_m ?? 0);
+  const post95SearchDistance = Number(coverageQuality.post_95_search_distance_m ?? 0);
   const maxConnectorLength = Number(routeQuality.max_connector_length ?? 0);
-  const idleRatio = idleTimeRatio(diagnostics);
+  const maxLogicalConnectorLength = Number(routeQuality.max_logical_connector_length ?? 0);
+  const longLogicalConnectorCount = Number(routeQuality.long_logical_connector_count ?? 0);
+  const idleRatio = Number(allocationQuality.fleet_idle_time_ratio ?? idleTimeRatio(diagnostics));
+  const unreachableCells = Number(coverageQuality.unreachable_cells_count ?? 0);
   const stuckCount = (state?.active_commands || []).filter((command) => {
     const progress = typeof command.progress === "number" ? command.progress : null;
     return progress !== null && progress <= 0 && (command.remaining_path || []).length === 0;
@@ -80,15 +85,27 @@ export function evaluateAcceptance(state: SimulationState | undefined, commandLo
     },
     {
       id: "workload_balance",
-      label: "Workload balance",
+      label: "All-UAV workload balance",
       status: workloadBalance >= 0.92 ? "PASS" : "WARN",
       detail: `${workloadBalance.toFixed(3)} target >= 0.920`,
+    },
+    {
+      id: "unreachable_cells",
+      label: "Unreachable searchable cells",
+      status: unreachableCells === 0 ? "PASS" : "WARN",
+      detail: `${unreachableCells} cells excluded from ordinary tasks`,
     },
     {
       id: "post_95_distance",
       label: "Post-95 extra distance",
       status: post95Distance <= 1000 ? "PASS" : "WARN",
       detail: `${post95Distance.toFixed(1)} m after coverage goal`,
+    },
+    {
+      id: "post_95_search_distance",
+      label: "Post-95 search distance",
+      status: post95SearchDistance <= 500 ? "PASS" : "WARN",
+      detail: `${post95SearchDistance.toFixed(1)} m search after coverage goal`,
     },
     {
       id: "redundancy",
@@ -103,8 +120,14 @@ export function evaluateAcceptance(state: SimulationState | undefined, commandLo
       detail: `${maxConnectorLength.toFixed(1)} cells`,
     },
     {
+      id: "logical_connector",
+      label: "Long logical connectors",
+      status: longLogicalConnectorCount === 0 && maxLogicalConnectorLength <= 10 ? "PASS" : "WARN",
+      detail: `${longLogicalConnectorCount} long, max ${maxLogicalConnectorLength.toFixed(1)} cells`,
+    },
+    {
       id: "idle_ratio",
-      label: "Idle time ratio",
+      label: "Fleet idle ratio",
       status: idleRatio <= 0.2 ? "PASS" : "WARN",
       detail: `${formatPercent(idleRatio)} idle / active+idle`,
     },

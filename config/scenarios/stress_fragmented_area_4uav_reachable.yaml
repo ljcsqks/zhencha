@@ -1,0 +1,34 @@
+name: "stress_fragmented_area_4uav_reachable"
+description: "STRESS: fragmented but reachable regions for 4-UAV allocation and coverage efficiency comparisons."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 4
+  simulation:
+    max_steps: 760
+
+map_features:
+  obstacles:
+    - {id: cross_v_north, shape: rectangle, frame: grid, x: 23, y: 0, width: 4, height: 18}
+    - {id: cross_v_south, shape: rectangle, frame: grid, x: 23, y: 32, width: 4, height: 18}
+    - {id: cross_h_west, shape: rectangle, frame: grid, x: 0, y: 23, width: 18, height: 4}
+    - {id: cross_h_east, shape: rectangle, frame: grid, x: 32, y: 23, width: 18, height: 4}
+    - {id: block_nw, shape: rectangle, frame: grid, x: 8, y: 8, width: 6, height: 6}
+    - {id: block_se, shape: rectangle, frame: grid, x: 35, y: 35, width: 7, height: 7}
+  no_fly_zones:
+    - {id: center_restricted, shape: circle, frame: grid, center_x: 25, center_y: 25, radius: 3}
+  priority_zones:
+    - {id: fragmented_priority_w, shape: rectangle, frame: grid, x: 3, y: 35, width: 8, height: 8, priority: 3.0}
+    - {id: fragmented_priority_e, shape: rectangle, frame: grid, x: 39, y: 5, width: 7, height: 8, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [0, 5], initial_position: [0, 5], battery: 1.0}
+  - {id: uav_02, home_position: [0, 18], initial_position: [0, 18], battery: 1.0}
+  - {id: uav_03, home_position: [0, 32], initial_position: [0, 32], battery: 1.0}
+  - {id: uav_04, home_position: [0, 45], initial_position: [0, 45], battery: 1.0}
+
+events: []

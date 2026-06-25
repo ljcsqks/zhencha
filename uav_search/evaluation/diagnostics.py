@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from uav_search.maps.grid_map import GridMap
+from uav_search.planning.reachability import build_reachability_index
+from uav_search.planning.reachability import connected_components as reachability_components
 from uav_search.uav.fleet_manager import FleetManager
 
 
@@ -45,12 +47,23 @@ def compute_diagnostics(
     per_uav = _per_uav_diagnostics(fleet, snapshots)
     route_quality = _route_quality(snapshots)
     coverage_quality = _coverage_quality(grid_map, snapshots)
+    reachability_quality = _reachability_quality(grid_map, fleet)
+    coverage_quality.update(reachability_quality)
     allocation_quality = _allocation_quality(per_uav, snapshots)
     return {
         "per_uav": per_uav,
         "route_quality": route_quality,
         "coverage_quality": coverage_quality,
         "allocation_quality": allocation_quality,
+    }
+
+
+def _reachability_quality(grid_map: GridMap, fleet: FleetManager) -> dict[str, Any]:
+    index = build_reachability_index(grid_map, fleet.get_all_states())
+    components = reachability_components(grid_map, index.unreachable_searchable_cells)
+    return {
+        "unreachable_cells_count": len(index.unreachable_searchable_cells),
+        "unreachable_components_count": len(components),
     }
 
 
@@ -104,13 +117,17 @@ def _per_uav_diagnostics(fleet: FleetManager, snapshots: list[dict[str, Any]]) -
         uav_id = state.id
         distance_m = float(final_distances.get(uav_id, state.total_distance_m))
         newly = len(coverage_by_uav.get(uav_id, set()))
+        active_s = active_time.get(uav_id, 0.0)
+        idle_s = idle_time.get(uav_id, 0.0)
+        observed_s = active_s + idle_s
         result[uav_id] = {
             "assigned_area_cells": newly,
             "newly_covered_cells": newly,
             "repeated_covered_cells": repeat_by_uav.get(uav_id, 0),
             "distance_m": distance_m,
-            "active_time_s": active_time.get(uav_id, 0.0),
-            "idle_time_s": idle_time.get(uav_id, 0.0),
+            "active_time_s": active_s,
+            "idle_time_s": idle_s,
+            "idle_time_ratio": idle_s / observed_s if observed_s > 0 else 0.0,
             "confirm_time_s": confirm_time.get(uav_id, 0.0),
             "replan_count": final_replans,
             "turn_count": turn_count.get(uav_id, 0),
@@ -121,6 +138,7 @@ def _per_uav_diagnostics(fleet: FleetManager, snapshots: list[dict[str, Any]]) -
 
 def _route_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     connectors: list[float] = []
+    logical_connectors: list[float] = []
     total_turns = 0
     total_distance = 0.0
     for snapshot in snapshots:
@@ -130,7 +148,11 @@ def _route_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
             if len(path) < 2:
                 continue
             connectors.extend(_segment_lengths(path))
+            logical_waypoints = _logical_waypoints(command)
+            if len(logical_waypoints) >= 2:
+                logical_connectors.extend(_segment_lengths(logical_waypoints))
     long_connectors = [value for value in connectors if value > 5.0]
+    long_logical_connectors = [value for value in logical_connectors if value > 5.0]
     total_turns = _turn_count(snapshots)
     turn_rate = total_turns / total_distance if total_distance > 0 else 0.0
     return {
@@ -139,6 +161,9 @@ def _route_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "long_connector_count": len(long_connectors),
         "average_connector_length": sum(connectors) / len(connectors) if connectors else 0.0,
         "max_connector_length": max(connectors, default=0.0),
+        "long_logical_connector_count": len(long_logical_connectors),
+        "avg_logical_connector_length": sum(logical_connectors) / len(logical_connectors) if logical_connectors else 0.0,
+        "max_logical_connector_length": max(logical_connectors, default=0.0),
         "path_smoothness_score": 1.0 / (1.0 + turn_rate),
         "turn_rate": turn_rate,
     }
@@ -148,10 +173,17 @@ def _coverage_quality(grid_map: GridMap, snapshots: list[dict[str, Any]]) -> dic
     at_95 = next((snapshot for snapshot in snapshots if float(snapshot.get("global_coverage", 0.0)) >= 0.95), None)
     post_95_cells: set[tuple[int, int]] = set()
     post_95_distance = 0.0
+    post_95_search_distance = 0.0
+    post_95_return_distance = 0.0
+    post_95_confirm_distance = 0.0
     if at_95 is not None and snapshots:
         threshold_time = float(at_95.get("time_s", 0.0))
         threshold_distance = _snapshot_total_distance(at_95)
         post_95_distance = max(0.0, _snapshot_total_distance(snapshots[-1]) - threshold_distance)
+        post_by_mode = _post_threshold_distance_by_mode(snapshots, threshold_time)
+        post_95_search_distance = post_by_mode["search"]
+        post_95_return_distance = post_by_mode["return"]
+        post_95_confirm_distance = post_by_mode["confirm"]
         for snapshot in snapshots:
             if float(snapshot.get("time_s", 0.0)) > threshold_time:
                 post_95_cells.update((int(cell["x"]), int(cell["y"])) for cell in snapshot.get("coverage_changed_cells", []))
@@ -162,16 +194,26 @@ def _coverage_quality(grid_map: GridMap, snapshots: list[dict[str, Any]]) -> dic
         "priority_uncovered_cells": _priority_uncovered(grid_map),
         "post_95_new_coverage_cells": len(post_95_cells),
         "post_95_distance_m": post_95_distance,
+        "post_95_search_distance_m": post_95_search_distance,
+        "post_95_return_distance_m": post_95_return_distance,
+        "post_95_confirm_distance_m": post_95_confirm_distance,
     }
 
 
 def _allocation_quality(per_uav: dict[str, dict[str, Any]], snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     actual_costs = {uav_id: float(data.get("distance_m", 0.0)) for uav_id, data in per_uav.items()}
     active_finish_times = _finish_times(snapshots)
+    idle_ratios = [float(data.get("idle_time_ratio", 0.0)) for data in per_uav.values()]
+    workload_balance_all = _workload_balance(list(actual_costs.values()), include_zero=True)
+    workload_balance_active = _workload_balance(list(actual_costs.values()), include_zero=False)
     return {
         "route_cost_estimate_per_uav": dict(actual_costs),
+        "actual_distance_per_uav": dict(actual_costs),
         "actual_cost_per_uav": actual_costs,
-        "workload_balance": _workload_balance(list(actual_costs.values())),
+        "workload_balance": workload_balance_all,
+        "workload_balance_all_uavs": workload_balance_all,
+        "workload_balance_active_uavs": workload_balance_active,
+        "fleet_idle_time_ratio": sum(idle_ratios) / len(idle_ratios) if idle_ratios else 0.0,
         "max_uav_finish_time": max(active_finish_times.values(), default=0.0),
         "min_uav_finish_time": min(active_finish_times.values(), default=0.0),
         "idle_uav_count_after_50_percent_coverage": _idle_count_after(snapshots, 0.5),
@@ -183,9 +225,16 @@ def _covering_uavs(snapshot: dict[str, Any], x: int, y: int) -> list[str]:
     owners = []
     for uav in snapshot.get("uavs", []):
         pos = uav.get("position", {})
-        if abs(int(pos.get("x", 0)) - x) <= 2 and abs(int(pos.get("y", 0)) - y) <= 2:
+        radius = int(uav.get("sensor_radius_cells", 2))
+        if abs(int(pos.get("x", 0)) - x) <= radius and abs(int(pos.get("y", 0)) - y) <= radius:
             owners.append(str(uav.get("id")))
     return owners
+
+
+def _logical_waypoints(command: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = command.get("metadata") or {}
+    waypoints = metadata.get("logical_waypoints") or metadata.get("coverage_waypoints") or []
+    return [point for point in waypoints if isinstance(point, dict)]
 
 
 def _final_distances(snapshots: list[dict[str, Any]]) -> dict[str, float]:
@@ -232,6 +281,29 @@ def _snapshot_total_distance(snapshot: dict[str, Any]) -> float:
     return sum(float(uav.get("total_distance_m", 0.0)) for uav in snapshot.get("uavs", []))
 
 
+def _post_threshold_distance_by_mode(snapshots: list[dict[str, Any]], threshold_time: float) -> dict[str, float]:
+    totals = {"search": 0.0, "return": 0.0, "confirm": 0.0}
+    previous_by_uav: dict[str, float] = {}
+    for snapshot in snapshots:
+        time_s = float(snapshot.get("time_s", 0.0))
+        for uav in snapshot.get("uavs", []):
+            uav_id = str(uav.get("id"))
+            current_distance = float(uav.get("total_distance_m", 0.0))
+            previous_distance = previous_by_uav.get(uav_id)
+            previous_by_uav[uav_id] = current_distance
+            if previous_distance is None or time_s <= threshold_time:
+                continue
+            delta = max(0.0, current_distance - previous_distance)
+            status = str(uav.get("status", ""))
+            if status == "RETURNING":
+                totals["return"] += delta
+            elif status == "CONFIRMING":
+                totals["confirm"] += delta
+            else:
+                totals["search"] += delta
+    return totals
+
+
 def _uncovered_components(grid_map: GridMap) -> list[set[tuple[int, int]]]:
     unvisited = {(cell.x, cell.y) for cell in grid_map.get_unsearched_cells(threshold=0.95)}
     components: list[set[tuple[int, int]]] = []
@@ -270,8 +342,8 @@ def _idle_count_after(snapshots: list[dict[str, Any]], threshold: float) -> int:
     return sum(1 for uav in relevant.get("uavs", []) if str(uav.get("status")) == "IDLE")
 
 
-def _workload_balance(values: list[float]) -> float:
-    active = [value for value in values if value > 0]
+def _workload_balance(values: list[float], include_zero: bool = False) -> float:
+    active = list(values) if include_zero else [value for value in values if value > 0]
     if not active:
         return 1.0
     mean = sum(active) / len(active)

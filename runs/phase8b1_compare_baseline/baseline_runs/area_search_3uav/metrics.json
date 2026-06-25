@@ -1,0 +1,132 @@
+{
+  "run_id": "area_search_3uav",
+  "algorithm_version": "baseline_sparse_boustrophedon",
+  "code_version": "0756d35",
+  "config_hash": "dd500488ccad",
+  "final_time_s": 262.0,
+  "global_coverage": 0.9524225229157574,
+  "priority_coverage": 1.0,
+  "redundant_coverage_rate": 0.31439046746104493,
+  "total_distance_m": 7813.969696196704,
+  "effective_search_distance_m": 7813.969696196704,
+  "path_efficiency": 1.0,
+  "min_battery": 0.8550953182640362,
+  "event_count": 1,
+  "conflict_count": 0,
+  "no_fly_violations": 0,
+  "map_update_count": 1,
+  "target_found_count": 0,
+  "confirm_done_count": 0,
+  "time_to_95_coverage_s": 261.0,
+  "time_to_priority_coverage_s": 131.0,
+  "coverage_goal_met": true,
+  "priority_goal_met": true,
+  "turn_rate": 0.008574386976777109,
+  "replan_count": 11,
+  "coverage_gain_per_meter": 0.00012023300528163156,
+  "per_uav_workload_balance": 0.9990161268734759,
+  "target_response_time_s": null,
+  "target_confirm_duration_s": null,
+  "confirm_success_rate": 0.0,
+  "search_resume_delay_s": null,
+  "coverage_gap_at_confirm_done": 0.0,
+  "interrupted_task_resume_rate": 1.0,
+  "supplemental_task_count": 1,
+  "ignored_uncovered_cells": 109,
+  "final_uncovered_cells": 109,
+  "final_priority_uncovered_cells": 0,
+  "post_95_extra_time_s": 1.0,
+  "post_95_extra_distance_m": 0.0,
+  "diagnostics": {
+    "per_uav": {
+      "uav_01": {
+        "assigned_area_cells": 961,
+        "newly_covered_cells": 961,
+        "repeated_covered_cells": 65,
+        "distance_m": 2602.8427124746204,
+        "active_time_s": 260.0,
+        "idle_time_s": 2.0,
+        "idle_time_ratio": 0.007633587786259542,
+        "confirm_time_s": 0.0,
+        "replan_count": 11,
+        "turn_count": 29,
+        "average_coverage_gain_per_meter": 0.3692117066445176
+      },
+      "uav_02": {
+        "assigned_area_cells": 896,
+        "newly_covered_cells": 896,
+        "repeated_covered_cells": 171,
+        "distance_m": 2608.284271247462,
+        "active_time_s": 261.0,
+        "idle_time_s": 1.0,
+        "idle_time_ratio": 0.003816793893129771,
+        "confirm_time_s": 0.0,
+        "replan_count": 11,
+        "turn_count": 15,
+        "average_coverage_gain_per_meter": 0.3435208385363114
+      },
+      "uav_03": {
+        "assigned_area_cells": 738,
+        "newly_covered_cells": 738,
+        "repeated_covered_cells": 141,
+        "distance_m": 2602.8427124746213,
+        "active_time_s": 260.0,
+        "idle_time_s": 2.0,
+        "idle_time_ratio": 0.007633587786259542,
+        "confirm_time_s": 0.0,
+        "replan_count": 11,
+        "turn_count": 23,
+        "average_coverage_gain_per_meter": 0.2835361493274234
+      }
+    },
+    "route_quality": {
+      "approximate_crossing_count": 0,
+      "crossing_count": 0,
+      "long_connector_count": 0,
+      "average_connector_length": 1.0331534570674126,
+      "max_connector_length": 1.4142135623730951,
+      "long_logical_connector_count": 7,
+      "avg_logical_connector_length": 3.917451431956253,
+      "max_logical_connector_length": 8.0,
+      "path_smoothness_score": 0.9914985081046138,
+      "turn_rate": 0.008574386976777109
+    },
+    "coverage_quality": {
+      "uncovered_components_count_at_95": 8,
+      "largest_uncovered_component_at_95": 45,
+      "priority_uncovered_cells": 0,
+      "post_95_new_coverage_cells": 0,
+      "post_95_distance_m": 0.0,
+      "post_95_search_distance_m": 0.0,
+      "post_95_return_distance_m": 0.0,
+      "post_95_confirm_distance_m": 0.0,
+      "unreachable_cells_count": 0,
+      "unreachable_components_count": 0
+    },
+    "allocation_quality": {
+      "route_cost_estimate_per_uav": {
+        "uav_01": 2602.8427124746204,
+        "uav_02": 2608.284271247462,
+        "uav_03": 2602.8427124746213
+      },
+      "actual_distance_per_uav": {
+        "uav_01": 2602.8427124746204,
+        "uav_02": 2608.284271247462,
+        "uav_03": 2602.8427124746213
+      },
+      "actual_cost_per_uav": {
+        "uav_01": 2602.8427124746204,
+        "uav_02": 2608.284271247462,
+        "uav_03": 2602.8427124746213
+      },
+      "workload_balance": 0.9990161268734759,
+      "workload_balance_all_uavs": 0.9990161268734759,
+      "workload_balance_active_uavs": 0.9990161268734759,
+      "fleet_idle_time_ratio": 0.0063613231552162855,
+      "max_uav_finish_time": 261.0,
+      "min_uav_finish_time": 261.0,
+      "idle_uav_count_after_50_percent_coverage": 0,
+      "idle_uav_count_after_80_percent_coverage": 0
+    }
+  }
+}

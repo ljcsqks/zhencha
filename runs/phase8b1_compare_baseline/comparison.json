@@ -1,0 +1,78 @@
+{
+  "baseline_version": "baseline_sparse_boustrophedon",
+  "candidate_version": "baseline_sparse_boustrophedon",
+  "scenarios": {
+    "area_search_1uav": {
+      "final_coverage_delta": 0.0,
+      "time_to_95_delta_pct": 0.0,
+      "total_distance_delta_pct": 0.0,
+      "redundant_coverage_delta_pct": 0.0,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.0,
+      "turn_rate_delta": 0.0,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    },
+    "area_search_2uav": {
+      "final_coverage_delta": 0.0,
+      "time_to_95_delta_pct": 0.0,
+      "total_distance_delta_pct": 0.0,
+      "redundant_coverage_delta_pct": 0.0,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.0,
+      "turn_rate_delta": 0.0,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    },
+    "area_search_2uav_target_confirm": {
+      "final_coverage_delta": 0.0,
+      "time_to_95_delta_pct": 0.0,
+      "total_distance_delta_pct": 0.0,
+      "redundant_coverage_delta_pct": 0.0,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.0,
+      "turn_rate_delta": 0.0,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    },
+    "area_search_3uav": {
+      "final_coverage_delta": 0.0,
+      "time_to_95_delta_pct": 0.0,
+      "total_distance_delta_pct": 0.0,
+      "redundant_coverage_delta_pct": 0.0,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.0,
+      "turn_rate_delta": 0.0,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    },
+    "area_search_4uav": {
+      "final_coverage_delta": 0.0,
+      "time_to_95_delta_pct": 0.0,
+      "total_distance_delta_pct": 0.0,
+      "redundant_coverage_delta_pct": 0.0,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.0,
+      "turn_rate_delta": 0.0,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    },
+    "area_search_5uav": {
+      "final_coverage_delta": 0.0,
+      "time_to_95_delta_pct": 0.0,
+      "total_distance_delta_pct": 0.0,
+      "redundant_coverage_delta_pct": 0.0,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.0,
+      "turn_rate_delta": 0.0,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    }
+  }
+}
