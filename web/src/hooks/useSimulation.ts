@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { simulationClient } from "../api/client";
-import type { EventRequest, ScenarioInfo, SimulationState } from "../types/sim";
+import type { EventRequest, ExportResponse, ScenarioInfo, SimulationState } from "../types/sim";
 import {
   emptySimulationClientState,
   mergeSimulationState,
@@ -19,6 +19,7 @@ export interface SimulationActions {
   pause(): Promise<void>;
   refreshFullState(): Promise<void>;
   fetchMetrics(): Promise<void>;
+  exportRun(): Promise<void>;
   injectTarget(x: number, y: number): Promise<void>;
   updateObstacle(operation: "add_obstacle" | "remove_obstacle", x: number, y: number, width: number, height: number): Promise<void>;
   setUavOnlineState(uavId: string, online: boolean): Promise<void>;
@@ -49,6 +50,7 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   autoFollowLatestUav: boolean;
   setAutoFollowLatestUav(value: boolean): void;
   fullMetrics?: Record<string, unknown>;
+  exportResult?: ExportResponse;
   clearFrontEndLogs(): void;
 }
 
@@ -67,6 +69,7 @@ export function useSimulation(): UseSimulationResult {
   const [selectedCommandId, setSelectedCommandId] = useState<string | undefined>();
   const [autoFollowLatestUav, setAutoFollowLatestUav] = useState(false);
   const [fullMetrics, setFullMetrics] = useState<Record<string, unknown> | undefined>();
+  const [exportResult, setExportResult] = useState<ExportResponse | undefined>();
   const refreshingRef = useRef(false);
   const currentStateRef = useRef<SimulationState | undefined>(undefined);
   const hasConnectedRef = useRef(false);
@@ -76,6 +79,7 @@ export function useSimulation(): UseSimulationResult {
     currentStateRef.current = state;
     if (previousRunId && previousRunId !== state.run_id) {
       setFullMetrics(undefined);
+      setExportResult(undefined);
     }
     setClientState((previous) => mergeSimulationState(previous, state));
     if (autoFollowLatestUav && state.uavs.length > 0) {
@@ -116,6 +120,15 @@ export function useSimulation(): UseSimulationResult {
     try {
       setError(undefined);
       setFullMetrics(await simulationClient.getMetrics());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const exportRun = useCallback(async () => {
+    try {
+      setError(undefined);
+      setExportResult(await simulationClient.exportRun());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -191,6 +204,7 @@ export function useSimulation(): UseSimulationResult {
       pause: () => runRequest(async () => simulationClient.pauseSimulation()),
       refreshFullState,
       fetchMetrics,
+      exportRun,
       injectTarget: (x, y) =>
         postEventAndStep({
           type: "TARGET_FOUND",
@@ -217,7 +231,7 @@ export function useSimulation(): UseSimulationResult {
           data: {},
         }),
     }),
-    [fetchMetrics, loadScenarios, postEventAndStep, refreshFullState, runRequest, scenarios, selectedScenario],
+    [exportRun, fetchMetrics, loadScenarios, postEventAndStep, refreshFullState, runRequest, scenarios, selectedScenario],
   );
 
   return {
@@ -246,6 +260,7 @@ export function useSimulation(): UseSimulationResult {
     autoFollowLatestUav,
     setAutoFollowLatestUav,
     fullMetrics,
+    exportResult,
     clearFrontEndLogs: () =>
       setClientState((previous) => ({
         ...previous,

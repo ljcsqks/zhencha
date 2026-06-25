@@ -1,4 +1,4 @@
-import type { EventRequest, EventResponse, ScenarioListResponse, SimulationState, StateLevel } from "../types/sim";
+import type { EventRequest, EventResponse, ExportResponse, ScenarioListResponse, SimulationState, StateLevel } from "../types/sim";
 
 type FetchLike = typeof fetch;
 export type WebSocketStatus = "connected" | "reconnecting" | "offline";
@@ -18,6 +18,7 @@ export interface SimulationClient {
   pauseSimulation(): Promise<SimulationState>;
   getState(includeMap: boolean, stateLevel: StateLevel): Promise<SimulationState>;
   getMetrics(): Promise<Record<string, unknown>>;
+  exportRun(): Promise<ExportResponse>;
   postEvent(event: EventRequest): Promise<EventResponse>;
   connectWebSocket(
     onState: (state: SimulationState) => void,
@@ -75,6 +76,7 @@ export function createSimulationClient(options: ClientOptions = {}): SimulationC
     getState: (includeMap, stateLevel) =>
       request<SimulationState>(`/api/sim/state?include_map=${includeMap ? "true" : "false"}&state_level=${stateLevel}`),
     getMetrics: () => request<Record<string, unknown>>("/api/sim/metrics"),
+    exportRun: () => request<ExportResponse>("/api/sim/export", { method: "POST" }),
     postEvent: (event) =>
       request<EventResponse>("/api/sim/event", {
         method: "POST",

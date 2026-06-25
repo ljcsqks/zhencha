@@ -106,6 +106,7 @@ def run(
             fleet,
             simulator.snapshots,
             mission_complete_coverage_threshold=float(config["search"].get("mission_complete_coverage_threshold", 0.95)),
+            config=config,
         )
         save_metrics(metrics, metrics_path)
 

@@ -1,0 +1,32 @@
+name: "stress_5uav_balance"
+description: "STRESS: five UAV workload balance and diminishing-return diagnostics."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 5
+  simulation:
+    max_steps: 720
+
+map_features:
+  obstacles:
+    - {id: balance_block_1, shape: rectangle, frame: grid, x: 12, y: 8, width: 5, height: 12}
+    - {id: balance_block_2, shape: rectangle, frame: grid, x: 24, y: 20, width: 5, height: 14}
+    - {id: balance_block_3, shape: rectangle, frame: grid, x: 36, y: 8, width: 5, height: 12}
+  no_fly_zones:
+    - {id: balance_no_fly, shape: circle, frame: grid, center_x: 24, center_y: 38, radius: 3}
+  priority_zones:
+    - {id: balance_priority_n, shape: rectangle, frame: grid, x: 6, y: 4, width: 8, height: 6, priority: 3.0}
+    - {id: balance_priority_s, shape: rectangle, frame: grid, x: 36, y: 40, width: 8, height: 6, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [0, 4], initial_position: [0, 4], battery: 1.0}
+  - {id: uav_02, home_position: [0, 14], initial_position: [0, 14], battery: 1.0}
+  - {id: uav_03, home_position: [0, 24], initial_position: [0, 24], battery: 1.0}
+  - {id: uav_04, home_position: [0, 34], initial_position: [0, 34], battery: 1.0}
+  - {id: uav_05, home_position: [0, 44], initial_position: [0, 44], battery: 1.0}
+
+events: []

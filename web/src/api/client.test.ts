@@ -127,4 +127,23 @@ describe("simulation API client", () => {
 
     await expect(client.getState(true, "full")).rejects.toThrow("scenario_path not found");
   });
+
+  it("posts export requests and returns the exported file list", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ run_id: "run_export", export_dir: "runs/web_exports/run_export", files: ["summary.json"] }),
+    });
+    const client = createSimulationClient({
+      baseUrl: "http://backend.test",
+      fetchImpl: fetchMock,
+    });
+
+    const result = await client.exportRun();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://backend.test/api/sim/export",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.files).toEqual(["summary.json"]);
+  });
 });

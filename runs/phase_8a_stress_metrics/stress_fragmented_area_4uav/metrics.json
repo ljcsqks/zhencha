@@ -1,0 +1,127 @@
+{
+  "run_id": "stress_fragmented_area_4uav",
+  "algorithm_version": "baseline_sparse_boustrophedon",
+  "code_version": "949b7f7",
+  "config_hash": "62722d264efd",
+  "final_time_s": 109.0,
+  "global_coverage": 0.2694965449160908,
+  "priority_coverage": 0.5333333333333333,
+  "redundant_coverage_rate": 0.18315018315018314,
+  "total_distance_m": 2112.1320343559646,
+  "effective_search_distance_m": 2112.1320343559646,
+  "path_efficiency": 1.0,
+  "min_battery": 0.9397862353828634,
+  "event_count": 0,
+  "conflict_count": 0,
+  "no_fly_violations": 0,
+  "map_update_count": 0,
+  "target_found_count": 0,
+  "confirm_done_count": 0,
+  "time_to_95_coverage_s": null,
+  "time_to_priority_coverage_s": null,
+  "coverage_goal_met": false,
+  "priority_goal_met": false,
+  "turn_rate": 0.016097478494220815,
+  "replan_count": 2,
+  "coverage_gain_per_meter": 0.00011918172626520841,
+  "per_uav_workload_balance": 0.9743674832608948,
+  "target_response_time_s": null,
+  "target_confirm_duration_s": null,
+  "confirm_success_rate": 0.0,
+  "search_resume_delay_s": null,
+  "coverage_gap_at_confirm_done": 0.0,
+  "interrupted_task_resume_rate": 1.0,
+  "supplemental_task_count": 0,
+  "ignored_uncovered_cells": 0,
+  "final_uncovered_cells": 1480,
+  "final_priority_uncovered_cells": 56,
+  "post_95_extra_time_s": null,
+  "post_95_extra_distance_m": null,
+  "diagnostics": {
+    "per_uav": {
+      "uav_01": {
+        "assigned_area_cells": 9,
+        "newly_covered_cells": 9,
+        "repeated_covered_cells": 0,
+        "distance_m": 0.0,
+        "active_time_s": 0.0,
+        "idle_time_s": 109.0,
+        "confirm_time_s": 0.0,
+        "replan_count": 2,
+        "turn_count": 0,
+        "average_coverage_gain_per_meter": 0.0
+      },
+      "uav_02": {
+        "assigned_area_cells": 9,
+        "newly_covered_cells": 9,
+        "repeated_covered_cells": 0,
+        "distance_m": 0.0,
+        "active_time_s": 0.0,
+        "idle_time_s": 109.0,
+        "confirm_time_s": 0.0,
+        "replan_count": 2,
+        "turn_count": 0,
+        "average_coverage_gain_per_meter": 0.0
+      },
+      "uav_03": {
+        "assigned_area_cells": 252,
+        "newly_covered_cells": 252,
+        "repeated_covered_cells": 43,
+        "distance_m": 1083.8477631085025,
+        "active_time_s": 108.0,
+        "idle_time_s": 1.0,
+        "confirm_time_s": 0.0,
+        "replan_count": 2,
+        "turn_count": 25,
+        "average_coverage_gain_per_meter": 0.23250497770762354
+      },
+      "uav_04": {
+        "assigned_area_cells": 283,
+        "newly_covered_cells": 283,
+        "repeated_covered_cells": 50,
+        "distance_m": 1028.284271247462,
+        "active_time_s": 102.0,
+        "idle_time_s": 7.0,
+        "confirm_time_s": 0.0,
+        "replan_count": 2,
+        "turn_count": 9,
+        "average_coverage_gain_per_meter": 0.2752157238160211
+      }
+    },
+    "route_quality": {
+      "approximate_crossing_count": 0,
+      "crossing_count": 0,
+      "long_connector_count": 0,
+      "average_connector_length": 1.0303083094419339,
+      "max_connector_length": 1.4142135623730951,
+      "path_smoothness_score": 0.9841575450830997,
+      "turn_rate": 0.016097478494220815
+    },
+    "coverage_quality": {
+      "uncovered_components_count_at_95": 3,
+      "largest_uncovered_component_at_95": 528,
+      "priority_uncovered_cells": 56,
+      "post_95_new_coverage_cells": 0,
+      "post_95_distance_m": 0.0
+    },
+    "allocation_quality": {
+      "route_cost_estimate_per_uav": {
+        "uav_01": 0.0,
+        "uav_02": 0.0,
+        "uav_03": 1083.8477631085025,
+        "uav_04": 1028.284271247462
+      },
+      "actual_cost_per_uav": {
+        "uav_01": 0.0,
+        "uav_02": 0.0,
+        "uav_03": 1083.8477631085025,
+        "uav_04": 1028.284271247462
+      },
+      "workload_balance": 0.9743674832608948,
+      "max_uav_finish_time": 108.0,
+      "min_uav_finish_time": 102.0,
+      "idle_uav_count_after_50_percent_coverage": 0,
+      "idle_uav_count_after_80_percent_coverage": 0
+    }
+  }
+}

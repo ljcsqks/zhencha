@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from uav_search.evaluation.diagnostics import algorithm_version, code_version, compute_diagnostics, config_hash
 from uav_search.maps.grid_map import GridMap
 from uav_search.uav.fleet_manager import FleetManager
 
@@ -13,6 +14,9 @@ from uav_search.uav.fleet_manager import FleetManager
 @dataclass
 class MetricsResult:
     run_id: str
+    algorithm_version: str
+    code_version: str
+    config_hash: str
     final_time_s: float
     global_coverage: float
     priority_coverage: float
@@ -47,6 +51,7 @@ class MetricsResult:
     final_priority_uncovered_cells: int
     post_95_extra_time_s: float | None
     post_95_extra_distance_m: float | None
+    diagnostics: dict[str, Any]
 
 
 def compute_metrics(
@@ -55,6 +60,8 @@ def compute_metrics(
     fleet: FleetManager,
     snapshots: list[dict[str, Any]],
     mission_complete_coverage_threshold: float = 0.95,
+    config: dict[str, Any] | None = None,
+    algorithm_version_override: str | None = None,
 ) -> MetricsResult:
     """Compute first-pass metrics from final state and recorded snapshots."""
     states = fleet.get_all_states()
@@ -79,6 +86,9 @@ def compute_metrics(
 
     return MetricsResult(
         run_id=run_id,
+        algorithm_version=algorithm_version(config, algorithm_version_override),
+        code_version=code_version(),
+        config_hash=config_hash(config),
         final_time_s=final_time_s,
         global_coverage=grid_map.coverage_rate(),
         priority_coverage=grid_map.coverage_rate(priority_only=True),
@@ -113,6 +123,7 @@ def compute_metrics(
         final_priority_uncovered_cells=final_priority_uncovered_cells,
         post_95_extra_time_s=None if time_to_95 is None else max(0.0, final_time_s - time_to_95),
         post_95_extra_distance_m=_post_threshold_distance(snapshots, time_to_95),
+        diagnostics=compute_diagnostics(grid_map, fleet, snapshots),
     )
 
 

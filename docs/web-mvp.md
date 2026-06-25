@@ -2,6 +2,8 @@
 
 Phase 7a adds a single-user React + Vite + TypeScript console over the FastAPI Simulation Server. The Web app does not call scheduler, map, or fleet internals. It uses HTTP and WebSocket endpoints exposed by `uav_search.server.app`.
 
+Phase 7c adds demo presets, server-side run export, local snapshots replay, and an acceptance panel for PASS/WARN/FAIL demo checks. See `docs/demo-runbook.md` for the operator script.
+
 ## Start Backend
 
 ```bash
@@ -33,6 +35,8 @@ npm run dev
 - Use `Step 1`, `Step N`, `Start`, and `Pause` to control simulation time.
 - Use `Refresh full state` when a full map resync is needed.
 - Use `Fetch metrics` for the full `compute_metrics` result. Normal tick states use a lightweight metrics summary.
+- Use `Export Run` after at least one step to write replay and metric artifacts under `runs/web_exports/<run_id>/`.
+- Load an exported `snapshots.json` in the Replay panel to inspect a completed run without controlling the live simulation.
 - Select `Inject Target`, then click the map to send a `TARGET_FOUND` event.
 - Select `Add Obstacle` or `Remove Obstacle`, then drag a rectangle on the map to send a `MAP_UPDATE`.
 - Use `Offline` and `Recover` in the UAV panel to send `UAV_OFFLINE` and `UAV_RECOVERED`.
@@ -52,6 +56,7 @@ npm run dev
 - Lite states include `active_commands` with `remaining_path` and progress. The map draws active remaining paths first, then falls back to recently issued command paths.
 - While the simulation is running, event injection only queues the event and applies the returned state. While paused, the frontend queues the event and then performs one step so the result is visible immediately.
 - WebSocket status is shown as `connected`, `reconnecting`, or `offline`. Reconnect uses capped backoff and refreshes full state after reconnection; invalid WebSocket JSON is reported as an error without crashing the UI.
+- Replay mode uses local JSON only. While replay is active, real-time controls and event injection are hidden to avoid mixing replay inspection with live simulation.
 
 ## Known Limits
 

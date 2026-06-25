@@ -30,3 +30,5 @@ def test_run_batch_outputs_per_scenario_artifacts(tmp_path: Path) -> None:
         header = next(csv.reader(handle))
     assert "supplemental_task_count" in header
     assert "ignored_uncovered_cells" in header
+    assert "algorithm_version" in header
+    assert "config_hash" in header

@@ -12,6 +12,9 @@ from uav_search.main import run
 
 SUMMARY_FIELDS = [
     "run_id",
+    "algorithm_version",
+    "code_version",
+    "config_hash",
     "final_time_s",
     "global_coverage",
     "priority_coverage",

@@ -87,6 +87,7 @@ def metrics_summary(
         mission_complete_coverage_threshold=float(
             config.get("search", {}).get("mission_complete_coverage_threshold", 0.95)
         ),
+        config=config,
     )
     return asdict(metrics)
 

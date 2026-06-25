@@ -1,0 +1,16 @@
+{
+  "run_id": "run_dc831777534f",
+  "scenario_name": "area_search_1uav",
+  "final_time_s": 2.0,
+  "final_coverage": 0.004508196721311476,
+  "priority_coverage": 0.0,
+  "time_to_95_coverage_s": null,
+  "total_distance_m": 20.0,
+  "redundant_coverage_rate": 0.0,
+  "no_fly_violations": 0,
+  "target_found_count": 0,
+  "confirm_done_count": 0,
+  "confirm_success_rate": 0.0,
+  "interrupted_task_resume_rate": 1.0,
+  "exported_at": "2026-06-24T16:14:41.170318+00:00"
+}

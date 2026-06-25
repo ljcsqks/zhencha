@@ -1,4 +1,4 @@
-import { Pause, Play, RotateCcw, SkipForward, RefreshCw } from "lucide-react";
+import { BarChart3, Download, Pause, Play, RotateCcw, SkipForward, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { UseSimulationResult } from "../hooks/useSimulation";
 
@@ -55,6 +55,20 @@ export function ControlPanel({ sim }: Props) {
       <button className="wide-button" onClick={sim.refreshFullState}>
         <RefreshCw size={15} /> Refresh full state
       </button>
+      <button className="wide-button" onClick={sim.fetchMetrics}>
+        <BarChart3 size={15} /> Fetch metrics
+      </button>
+      <button className="wide-button" onClick={sim.exportRun}>
+        <Download size={15} /> Export Run
+      </button>
+
+      {sim.exportResult && (
+        <div className="export-result">
+          <strong>Exported</strong>
+          <span className="mono compact">{sim.exportResult.export_dir}</span>
+          <small>{sim.exportResult.files.join(", ")}</small>
+        </div>
+      )}
 
       <dl className="stat-list">
         <div>

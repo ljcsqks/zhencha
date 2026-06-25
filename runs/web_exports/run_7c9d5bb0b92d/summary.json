@@ -1,0 +1,16 @@
+{
+  "run_id": "run_7c9d5bb0b92d",
+  "scenario_name": "demo_search_3uav",
+  "final_time_s": 4.0,
+  "final_coverage": 0.023295213892418468,
+  "priority_coverage": 0.0,
+  "time_to_95_coverage_s": null,
+  "total_distance_m": 108.2842712474619,
+  "redundant_coverage_rate": 0.0,
+  "no_fly_violations": 0,
+  "target_found_count": 0,
+  "confirm_done_count": 0,
+  "confirm_success_rate": 0.0,
+  "interrupted_task_resume_rate": 1.0,
+  "exported_at": "2026-06-24T16:12:47.533192+00:00"
+}

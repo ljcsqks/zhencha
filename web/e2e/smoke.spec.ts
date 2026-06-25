@@ -1,14 +1,21 @@
 import { expect, test } from "@playwright/test";
+import path from "node:path";
 
-test("simulation console can reset, step, inject target, add obstacle, and toggle UAV offline", async ({ page }) => {
+test("simulation console can run demos, export, replay, and show acceptance", async ({ page, request }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "UAV Simulation Console" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Acceptance" })).toBeVisible();
+  await expect(page.getByText(/PASS|WARN|FAIL/).first()).toBeVisible();
 
+  await page.getByRole("button", { name: /Multi-UAV Search/i }).click();
   await page.getByRole("button", { name: /Reset/i }).click();
   await expect(page.getByRole("heading", { name: "Mission Map" })).toBeVisible();
   const canvas = page.locator("canvas.map-canvas");
   await expect(canvas).toBeVisible();
 
+  await page.getByRole("button", { name: /^Start$/i }).click();
+  await page.waitForTimeout(400);
+  await page.getByRole("button", { name: /^Pause$/i }).click();
   const before = await page.locator("dd").filter({ hasText: /^0\.0$/ }).count();
   const firstCanvas = await canvas.screenshot();
   await page.getByRole("button", { name: /Step 1/i }).click();
@@ -17,10 +24,25 @@ test("simulation console can reset, step, inject target, add obstacle, and toggl
   expect(Buffer.compare(firstCanvas, steppedCanvas)).not.toBe(0);
   expect(before).toBeGreaterThanOrEqual(0);
 
+  await page.getByRole("button", { name: /Export Run/i }).click();
+  await expect(page.getByText(/summary\.json/)).toBeVisible({ timeout: 10000 });
+  const exportResponse = await request.post("http://127.0.0.1:8000/api/sim/export");
+  expect(exportResponse.ok()).toBe(true);
+  const exportPayload = await exportResponse.json();
+  expect(exportPayload.files).toContain("snapshots.json");
+
+  await page.locator('input[type="file"]').setInputFiles(path.resolve("..", exportPayload.export_dir, "snapshots.json"));
+  await expect(page.getByText(/Replay mode/i)).toBeVisible({ timeout: 10000 });
+  await page.locator('input[type="range"]').last().fill("1");
+  await page.getByRole("button", { name: /Exit replay/i }).click();
+  await expect(page.getByText(/Replay mode/i)).toBeHidden({ timeout: 10000 });
+
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   if (!box) return;
 
+  await page.getByRole("button", { name: /Target Confirm/i }).click();
+  await page.getByRole("button", { name: /Reset/i }).click();
   await page.getByRole("button", { name: "Inject Target" }).click();
   await page.mouse.click(box.x + box.width * 0.05, box.y + box.height * 0.05);
   await expect(page.getByText(/TARGET_FOUND|CONFIRM_TARGET|server_target_found/).first()).toBeVisible({ timeout: 10000 });
@@ -28,6 +50,8 @@ test("simulation console can reset, step, inject target, add obstacle, and toggl
   await page.getByRole("button", { name: /Step N/i }).click();
   await expect(page.getByRole("row", { name: /CONFIRM_TARGET.*completed/ }).first()).toBeVisible({ timeout: 15000 });
 
+  await page.getByRole("button", { name: /Dynamic Obstacle/i }).click();
+  await page.getByRole("button", { name: /Reset/i }).click();
   await page.getByRole("button", { name: "Add Obstacle" }).click();
   await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.55);
   await page.mouse.down();
@@ -35,7 +59,11 @@ test("simulation console can reset, step, inject target, add obstacle, and toggl
   await page.mouse.up();
   await expect(page.getByText(/MAP_UPDATE|server_map_update/).first()).toBeVisible({ timeout: 10000 });
 
-  await page.getByRole("button", { name: /Offline/i }).first().click();
+  await page.getByRole("button", { name: /UAV Offline \/ Recover/i }).click();
+  await page.getByRole("button", { name: /Reset/i }).click();
+  await page.getByRole("button", { name: /^Offline$/i }).first().click();
   await expect(page.getByText(/UAV_OFFLINE|OFFLINE/).first()).toBeVisible({ timeout: 10000 });
   await expect(page.getByText(/uav_offline|failed|cancelled/i).first()).toBeVisible({ timeout: 10000 });
+  await page.getByRole("button", { name: /^Recover$/i }).first().click();
+  await expect(page.getByText(/UAV_RECOVERED|IDLE|SEARCHING/).first()).toBeVisible({ timeout: 10000 });
 });

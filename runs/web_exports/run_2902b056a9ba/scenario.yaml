@@ -1,0 +1,54 @@
+name: "demo_search_3uav"
+description: "DEMO: three UAVs cooperatively cover a 500x500 search area with one priority region."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 620
+
+map_features:
+  obstacles:
+    - id: "demo_central_obstacle"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 210
+      y_m: 120
+      width_m: 50
+      height_m: 220
+  no_fly_zones:
+    - id: "demo_no_fly"
+      shape: "circle"
+      frame: "world"
+      center_x_m: 120
+      center_y_m: 180
+      radius_m: 30
+  priority_zones:
+    - id: "demo_priority"
+      shape: "rectangle"
+      frame: "world"
+      x_m: 330
+      y_m: 320
+      width_m: 95
+      height_m: 75
+      priority: 3.0
+
+uavs:
+  - id: "uav_01"
+    home_position: [0, 6]
+    initial_position: [0, 6]
+    battery: 1.0
+  - id: "uav_02"
+    home_position: [0, 25]
+    initial_position: [0, 25]
+    battery: 1.0
+  - id: "uav_03"
+    home_position: [0, 44]
+    initial_position: [0, 44]
+    battery: 1.0
+
+events: []

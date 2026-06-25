@@ -209,6 +209,18 @@ h2 {
   margin-top: 8px;
 }
 
+.export-result,
+.replay-meta {
+  margin-top: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #d9e0d6;
+  border-radius: 7px;
+  background: #fbfcf8;
+  overflow-wrap: anywhere;
+}
+
 .stat-list,
 .metric-grid {
   margin: 12px 0 0;
@@ -332,6 +344,81 @@ dd {
 .legend.changed { background: rgba(255, 57, 57, 0.72); }
 .legend.searching { background: #00a6ff; }
 .legend.confirming { background: #b84cff; }
+
+.demo-list,
+.acceptance-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.demo-card {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  min-height: auto;
+  padding: 9px;
+  text-align: left;
+  background: #fbfcf8;
+}
+
+.demo-card.selected {
+  border-color: #1d6fa5;
+  background: #dceefa;
+}
+
+.demo-card span,
+.demo-card small {
+  color: #59685d;
+}
+
+.acceptance-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 8px;
+  border: 1px solid #d9e0d6;
+  border-radius: 7px;
+  background: #fbfcf8;
+}
+
+.acceptance-row strong {
+  justify-self: end;
+  font-size: 12px;
+}
+
+.acceptance-row small {
+  grid-column: 1 / -1;
+  color: #59685d;
+}
+
+.acceptance-row.pass strong { color: #167348; }
+.acceptance-row.warn strong { color: #946200; }
+.acceptance-row.fail strong { color: #b42318; }
+
+.replay-panel.active {
+  border-color: #946200;
+}
+
+.file-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid #aab5aa;
+  border-radius: 6px;
+  background: #f8faf6;
+  cursor: pointer;
+}
+
+.file-picker input {
+  display: none;
+}
+
+.error-text {
+  color: #b42318;
+}
 
 .uav-list,
 .target-list,

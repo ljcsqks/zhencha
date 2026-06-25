@@ -1,0 +1,30 @@
+name: "stress_obstacle_maze_3uav"
+description: "STRESS: maze-like obstacles and narrow passages for route-quality diagnostics."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 760
+
+map_features:
+  obstacles:
+    - {id: wall_a, shape: rectangle, frame: grid, x: 8, y: 5, width: 4, height: 35}
+    - {id: wall_b, shape: rectangle, frame: grid, x: 18, y: 10, width: 4, height: 35}
+    - {id: wall_c, shape: rectangle, frame: grid, x: 28, y: 5, width: 4, height: 35}
+    - {id: wall_d, shape: rectangle, frame: grid, x: 38, y: 10, width: 4, height: 32}
+  no_fly_zones:
+    - {id: maze_no_fly, shape: circle, frame: grid, center_x: 24, center_y: 25, radius: 3}
+  priority_zones:
+    - {id: maze_priority, shape: rectangle, frame: grid, x: 40, y: 4, width: 7, height: 8, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [0, 6], initial_position: [0, 6], battery: 1.0}
+  - {id: uav_02, home_position: [0, 25], initial_position: [0, 25], battery: 1.0}
+  - {id: uav_03, home_position: [0, 44], initial_position: [0, 44], battery: 1.0}
+
+events: []

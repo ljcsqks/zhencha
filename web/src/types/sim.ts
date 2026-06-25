@@ -120,3 +120,9 @@ export interface EventResponse {
   queued: boolean;
   state: SimulationState;
 }
+
+export interface ExportResponse {
+  run_id: string;
+  export_dir: string;
+  files: string[];
+}

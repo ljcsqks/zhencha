@@ -88,6 +88,14 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
     assert metrics.interrupted_task_resume_rate == 1.0
     assert metrics.post_95_extra_time_s == 0.0
     assert metrics.post_95_extra_distance_m == 0.0
+    assert metrics.algorithm_version == "baseline_sparse_boustrophedon"
+    assert metrics.code_version
+    assert metrics.config_hash
+    assert set(metrics.diagnostics) == {"per_uav", "route_quality", "coverage_quality", "allocation_quality"}
+    assert "uav_01" in metrics.diagnostics["per_uav"]
+    assert "max_connector_length" in metrics.diagnostics["route_quality"]
+    assert "uncovered_components_count_at_95" in metrics.diagnostics["coverage_quality"]
+    assert "workload_balance" in metrics.diagnostics["allocation_quality"]
 
 
 def test_save_metrics_writes_json(tmp_path: Path) -> None:
@@ -100,3 +108,5 @@ def test_save_metrics_writes_json(tmp_path: Path) -> None:
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["run_id"] == "empty"
+    assert payload["algorithm_version"] == "baseline_sparse_boustrophedon"
+    assert "diagnostics" in payload

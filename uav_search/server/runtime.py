@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any, Awaitable, Callable
@@ -161,8 +164,53 @@ class SimulationRuntime:
                 mission_complete_coverage_threshold=float(
                     self.config.get("search", {}).get("mission_complete_coverage_threshold", 0.95)
                 ),
+                config=self.config,
             )
             return metrics.__dict__.copy()
+
+    def export_run(self) -> dict[str, Any]:
+        with self._lock:
+            self._require_ready()
+            if not self.simulator.snapshots:
+                raise RuntimeError("cannot export run without snapshots")
+
+            export_root = Path("runs") / "web_exports"
+            export_dir = export_root / self.run_id
+            export_dir.mkdir(parents=True, exist_ok=True)
+
+            metrics = self.get_metrics()
+            final_state = self.get_state(include_map=True, state_level="full")
+            summary = _export_summary(
+                run_id=self.run_id,
+                scenario_name=str(self.scenario.get("name", Path(self.scenario_path).stem)),
+                metrics=metrics,
+                final_state=final_state,
+            )
+            files: dict[str, Any] = {
+                "snapshots.json": {
+                    "run_id": self.run_id,
+                    "scenario_name": str(self.scenario.get("name", Path(self.scenario_path).stem)),
+                    "summary": summary,
+                    "map": final_state.get("map"),
+                    "steps": self.simulator.snapshots,
+                },
+                "metrics.json": metrics,
+                "final_state.json": final_state,
+                "event_log.json": self._event_log,
+                "command_log.json": _command_log_from_snapshots(self.simulator.snapshots),
+                "summary.json": summary,
+            }
+            for filename, payload in files.items():
+                _write_json(export_dir / filename, payload)
+
+            shutil.copyfile(Path(self.scenario_path), export_dir / "scenario.yaml")
+            shutil.copyfile(Path(self.config_path), export_dir / "config.yaml")
+
+            return {
+                "run_id": self.run_id,
+                "export_dir": str(export_dir),
+                "files": sorted([*files.keys(), "scenario.yaml", "config.yaml"]),
+            }
 
     def get_scenarios(self, scenario_dir: str | Path = "config/scenarios") -> list[dict[str, str]]:
         scenarios: list[dict[str, str]] = []
@@ -357,3 +405,73 @@ def _dedupe_cells(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in items:
         ordered[(int(item["x"]), int(item["y"]))] = item
     return list(ordered.values())
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def _command_log_from_snapshots(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        time_s = snapshot.get("time_s")
+        for command in snapshot.get("commands", []):
+            rows.append({"kind": "command", "time_s": time_s, **dict(command)})
+        for ack in snapshot.get("command_acks", []):
+            rows.append({"kind": "ack", "time_s": time_s, **dict(ack)})
+    return rows
+
+
+def _export_summary(
+    *,
+    run_id: str,
+    scenario_name: str,
+    metrics: dict[str, Any],
+    final_state: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "scenario_name": scenario_name,
+        "final_time_s": metrics.get("final_time_s", final_state.get("time_s")),
+        "final_coverage": metrics.get("global_coverage", final_state.get("global_coverage")),
+        "priority_coverage": metrics.get("priority_coverage", final_state.get("priority_coverage")),
+        "time_to_95_coverage_s": metrics.get("time_to_95_coverage_s"),
+        "total_distance_m": metrics.get("total_distance_m"),
+        "redundant_coverage_rate": metrics.get("redundant_coverage_rate"),
+        "no_fly_violations": metrics.get("no_fly_violations"),
+        "target_found_count": metrics.get("target_found_count"),
+        "confirm_done_count": metrics.get("confirm_done_count"),
+        "confirm_success_rate": metrics.get("confirm_success_rate"),
+        "interrupted_task_resume_rate": metrics.get("interrupted_task_resume_rate"),
+        "algorithm_version": metrics.get("algorithm_version"),
+        "code_version": metrics.get("code_version"),
+        "config_hash": metrics.get("config_hash"),
+        "diagnostics": metrics.get("diagnostics", {}),
+        "workload_balance": _nested_metric(metrics, ["diagnostics", "allocation_quality", "workload_balance"], metrics.get("per_uav_workload_balance")),
+        "post_95_extra_distance_m": metrics.get("post_95_extra_distance_m"),
+        "max_connector_length": _nested_metric(metrics, ["diagnostics", "route_quality", "max_connector_length"], 0.0),
+        "idle_time_ratio": _idle_time_ratio(metrics.get("diagnostics", {})),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _nested_metric(payload: dict[str, Any], path: list[str], default: Any = None) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    return default if current is None else current
+
+
+def _idle_time_ratio(diagnostics: Any) -> float:
+    if not isinstance(diagnostics, dict):
+        return 0.0
+    per_uav = diagnostics.get("per_uav", {})
+    if not isinstance(per_uav, dict):
+        return 0.0
+    idle = sum(float(item.get("idle_time_s", 0.0)) for item in per_uav.values() if isinstance(item, dict))
+    active = sum(float(item.get("active_time_s", 0.0)) for item in per_uav.values() if isinstance(item, dict))
+    total = idle + active
+    return idle / total if total > 0 else 0.0

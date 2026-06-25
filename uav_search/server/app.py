@@ -98,6 +98,11 @@ def metrics() -> dict[str, Any]:
     return _call_runtime(runtime.get_metrics)
 
 
+@app.post("/api/sim/export")
+def export_run() -> dict[str, Any]:
+    return _call_runtime(runtime.export_run)
+
+
 @app.post("/api/sim/event")
 async def enqueue_event(request: EventRequest) -> dict[str, Any]:
     payload = _call_runtime(runtime.enqueue_event, request)
