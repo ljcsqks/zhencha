@@ -50,11 +50,13 @@ def compute_diagnostics(
     reachability_quality = _reachability_quality(grid_map, fleet)
     coverage_quality.update(reachability_quality)
     allocation_quality = _allocation_quality(per_uav, snapshots)
+    segment_quality = _segment_quality(snapshots)
     return {
         "per_uav": per_uav,
         "route_quality": route_quality,
         "coverage_quality": coverage_quality,
         "allocation_quality": allocation_quality,
+        "segment_quality": segment_quality,
     }
 
 
@@ -166,6 +168,61 @@ def _route_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "max_logical_connector_length": max(logical_connectors, default=0.0),
         "path_smoothness_score": 1.0 / (1.0 + turn_rate),
         "turn_rate": turn_rate,
+    }
+
+
+def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    segment_count_per_uav: dict[str, int] = {}
+    connector_cost_per_uav: dict[str, float] = {}
+    sweep_cost_per_uav: dict[str, float] = {}
+    orientations: list[str] = []
+    seen_segment_ids: set[tuple[str, str]] = set()
+    for snapshot in snapshots:
+        for command in snapshot.get("commands", []):
+            metadata = command.get("metadata") or {}
+            if metadata.get("planner_version") != "segment_sweep_v1":
+                continue
+            uav_id = str(command.get("uav_id", "unknown"))
+            segment_ids = [str(item) for item in metadata.get("segment_ids", []) if item is not None]
+            if segment_ids:
+                new_ids = [(uav_id, segment_id) for segment_id in segment_ids if (uav_id, segment_id) not in seen_segment_ids]
+                seen_segment_ids.update(new_ids)
+                segment_count = len(new_ids)
+            else:
+                segment_count = int(metadata.get("segment_count", 0) or 0)
+            if segment_count <= 0:
+                continue
+            connector_cost = float(metadata.get("estimated_connector_cost_m", 0.0) or 0.0)
+            sweep_cost = float(metadata.get("estimated_sweep_cost_m", 0.0) or 0.0)
+            segment_count_per_uav[uav_id] = segment_count_per_uav.get(uav_id, 0) + segment_count
+            connector_cost_per_uav[uav_id] = connector_cost_per_uav.get(uav_id, 0.0) + connector_cost
+            sweep_cost_per_uav[uav_id] = sweep_cost_per_uav.get(uav_id, 0.0) + sweep_cost
+            orientation = metadata.get("segment_orientation")
+            if isinstance(orientation, str):
+                orientations.append(orientation)
+
+    bundle_costs = {
+        uav_id: connector_cost_per_uav.get(uav_id, 0.0) + sweep_cost_per_uav.get(uav_id, 0.0)
+        for uav_id in set(connector_cost_per_uav) | set(sweep_cost_per_uav)
+    }
+    segment_lengths = [
+        float((command.get("metadata") or {}).get("estimated_sweep_cost_m", 0.0) or 0.0)
+        / max(1, int((command.get("metadata") or {}).get("segment_count", 1) or 1))
+        for snapshot in snapshots
+        for command in snapshot.get("commands", [])
+        if (command.get("metadata") or {}).get("planner_version") == "segment_sweep_v1"
+    ]
+    return {
+        "segment_count_total": sum(segment_count_per_uav.values()),
+        "segment_count_per_uav": segment_count_per_uav,
+        "estimated_connector_cost_per_uav": connector_cost_per_uav,
+        "estimated_sweep_cost_per_uav": sweep_cost_per_uav,
+        "segment_bundle_cost_per_uav": bundle_costs,
+        "max_segment_bundle_cost": max(bundle_costs.values(), default=0.0),
+        "segment_workload_balance": _workload_balance(list(bundle_costs.values()), include_zero=True),
+        "average_segment_length": sum(segment_lengths) / len(segment_lengths) if segment_lengths else 0.0,
+        "max_segment_length": max(segment_lengths, default=0.0),
+        "segment_orientation": _dominant_value(orientations),
     }
 
 
@@ -351,3 +408,12 @@ def _workload_balance(values: list[float], include_zero: bool = False) -> float:
         return 1.0
     variance = sum((value - mean) ** 2 for value in active) / len(active)
     return 1.0 / (1.0 + math.sqrt(variance) / mean)
+
+
+def _dominant_value(values: list[str]) -> str | None:
+    if not values:
+        return None
+    counts = {value: values.count(value) for value in set(values)}
+    if len(counts) > 1:
+        return "mixed"
+    return max(counts, key=counts.get)

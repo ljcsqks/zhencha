@@ -1,0 +1,22 @@
+{
+  "baseline_version": "baseline_sparse_boustrophedon",
+  "candidate_version": "segment_sweep_v1",
+  "scenarios": {
+    "area_search_2uav": {
+      "final_coverage_delta": 0.03401931961360771,
+      "time_to_95_delta_pct": 0.09855072463768116,
+      "total_distance_delta_pct": 0.23423630692061653,
+      "redundant_coverage_delta_pct": 0.8166996649406032,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "post_95_search_distance_delta_pct": 0.0,
+      "workload_balance_delta": -0.07191654440533146,
+      "workload_balance_active_delta": -0.07191654440533146,
+      "segment_count_delta": 228.0,
+      "segment_workload_balance_delta": -0.19662261380323054,
+      "turn_rate_delta": -0.004107408566426858,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    }
+  }
+}

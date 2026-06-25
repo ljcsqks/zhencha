@@ -101,3 +101,14 @@ def test_blocked_region_cache_suppresses_repeated_supplemental_candidate() -> No
     assert scheduler._is_region_blocked(region, now=11.0)
     scheduler._last_decision_time = 80.0
     assert not scheduler._is_region_blocked(region, now=80.0)
+
+
+def test_supplemental_tasks_wait_until_pending_search_tasks_are_allocated() -> None:
+    grid_map = GridMap(width_m=50, height_m=50, resolution_m=10)
+    scheduler = Scheduler(grid_map, _fleet(), _config())
+    scheduler._ensure_initial_tasks(now=0.0)
+    initial_count = len(scheduler.task_manager.tasks)
+
+    scheduler._ensure_supplemental_search_tasks(now=0.0)
+
+    assert len(scheduler.task_manager.tasks) == initial_count

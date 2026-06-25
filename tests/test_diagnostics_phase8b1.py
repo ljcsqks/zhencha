@@ -111,3 +111,89 @@ def test_post_95_search_distance_excludes_return_home() -> None:
     assert coverage["post_95_distance_m"] == 50.0
     assert coverage["post_95_search_distance_m"] == 0.0
     assert coverage["post_95_return_distance_m"] == 50.0
+
+
+def test_segment_diagnostics_read_command_metadata() -> None:
+    diagnostics = compute_diagnostics(
+        GridMap(width_m=200, height_m=200, resolution_m=10),
+        _fleet(),
+        [
+            {
+                "time_s": 1.0,
+                "commands": [
+                    {
+                        "command": "FOLLOW_PATH",
+                        "uav_id": "uav_01",
+                        "metadata": {
+                            "planner_version": "segment_sweep_v1",
+                            "segment_count": 2,
+                            "segment_ids": ["s1", "s2"],
+                            "estimated_connector_cost_m": 30.0,
+                            "estimated_sweep_cost_m": 100.0,
+                            "segment_orientation": "horizontal",
+                        },
+                    },
+                    {
+                        "command": "FOLLOW_PATH",
+                        "uav_id": "uav_02",
+                        "metadata": {
+                            "planner_version": "segment_sweep_v1",
+                            "segment_count": 1,
+                            "segment_ids": ["s3"],
+                            "estimated_connector_cost_m": 10.0,
+                            "estimated_sweep_cost_m": 40.0,
+                            "segment_orientation": "vertical",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+
+    segment_quality = diagnostics["segment_quality"]
+    assert segment_quality["segment_count_total"] == 3
+    assert segment_quality["segment_count_per_uav"] == {"uav_01": 2, "uav_02": 1}
+    assert segment_quality["estimated_connector_cost_per_uav"] == {"uav_01": 30.0, "uav_02": 10.0}
+    assert segment_quality["max_segment_bundle_cost"] == 130.0
+    assert segment_quality["segment_orientation"] in {"horizontal", "mixed"}
+
+
+def test_segment_diagnostics_deduplicate_replanned_segment_ids() -> None:
+    snapshots = [
+        {
+            "time_s": 1.0,
+            "commands": [
+                {
+                    "command": "FOLLOW_PATH",
+                    "uav_id": "uav_01",
+                    "metadata": {
+                        "planner_version": "segment_sweep_v1",
+                        "segment_count": 2,
+                        "segment_ids": ["s1", "s2"],
+                        "estimated_connector_cost_m": 10.0,
+                        "estimated_sweep_cost_m": 20.0,
+                    },
+                }
+            ],
+        },
+        {
+            "time_s": 2.0,
+            "commands": [
+                {
+                    "command": "REPLAN",
+                    "uav_id": "uav_01",
+                    "metadata": {
+                        "planner_version": "segment_sweep_v1",
+                        "segment_count": 2,
+                        "segment_ids": ["s1", "s2"],
+                        "estimated_connector_cost_m": 10.0,
+                        "estimated_sweep_cost_m": 20.0,
+                    },
+                }
+            ],
+        },
+    ]
+
+    diagnostics = compute_diagnostics(GridMap(width_m=200, height_m=200, resolution_m=10), _fleet(), snapshots)
+
+    assert diagnostics["segment_quality"]["segment_count_total"] == 2

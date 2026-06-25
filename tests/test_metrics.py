@@ -91,7 +91,13 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
     assert metrics.algorithm_version == "baseline_sparse_boustrophedon"
     assert metrics.code_version
     assert metrics.config_hash
-    assert set(metrics.diagnostics) == {"per_uav", "route_quality", "coverage_quality", "allocation_quality"}
+    assert set(metrics.diagnostics) == {
+        "per_uav",
+        "route_quality",
+        "coverage_quality",
+        "allocation_quality",
+        "segment_quality",
+    }
     assert "uav_01" in metrics.diagnostics["per_uav"]
     assert "max_connector_length" in metrics.diagnostics["route_quality"]
     assert "uncovered_components_count_at_95" in metrics.diagnostics["coverage_quality"]

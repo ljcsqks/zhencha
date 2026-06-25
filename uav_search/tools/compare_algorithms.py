@@ -19,6 +19,8 @@ DELTA_FIELDS = {
     "post_95_search_distance_delta_pct": ("diagnostics.coverage_quality.post_95_search_distance_m", "pct"),
     "workload_balance_delta": ("diagnostics.allocation_quality.workload_balance_all_uavs", "diff"),
     "workload_balance_active_delta": ("diagnostics.allocation_quality.workload_balance_active_uavs", "diff"),
+    "segment_count_delta": ("diagnostics.segment_quality.segment_count_total", "diff"),
+    "segment_workload_balance_delta": ("diagnostics.segment_quality.segment_workload_balance", "diff"),
     "turn_rate_delta": ("turn_rate", "diff"),
     "no_fly_violations_delta": ("no_fly_violations", "diff"),
     "confirm_success_rate_delta": ("confirm_success_rate", "diff"),

@@ -1,10 +1,9 @@
-INFO:     Started server process [4728]
+INFO:     Started server process [43804]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:65123 - "WebSocket /ws/sim" [accepted]
-INFO:     connection open
-INFO:     127.0.0.1:50633 - "WebSocket /ws/sim" [accepted]
+INFO:     127.0.0.1:56855 - "WebSocket /ws/sim" [accepted]
 INFO:     connection closed
+INFO:     127.0.0.1:59918 - "WebSocket /ws/sim" [accepted]
 INFO:     connection open
 INFO:     connection closed

@@ -277,6 +277,7 @@ class Task:
     replan_count: int = 0
     resume_owner_id: str | None = None
     allowed_uav_ids: set[str] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.coverage_waypoints and self.waypoints:

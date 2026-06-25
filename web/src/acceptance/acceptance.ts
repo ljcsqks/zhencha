@@ -16,6 +16,7 @@ export function evaluateAcceptance(state: SimulationState | undefined, commandLo
   const routeQuality = isRecord(diagnostics.route_quality) ? diagnostics.route_quality : {};
   const allocationQuality = isRecord(diagnostics.allocation_quality) ? diagnostics.allocation_quality : {};
   const coverageQuality = isRecord(diagnostics.coverage_quality) ? diagnostics.coverage_quality : {};
+  const segmentQuality = isRecord(diagnostics.segment_quality) ? diagnostics.segment_quality : {};
   const targets = state?.targets || {};
   const hasTargets = Object.keys(targets).length > 0 || Number(metrics.target_found_count || 0) > 0;
   const rejectedCount = commandLog.filter((entry) => ["rejected", "failed"].includes(String(entry.ack_status || ""))).length;
@@ -29,6 +30,8 @@ export function evaluateAcceptance(state: SimulationState | undefined, commandLo
   const longLogicalConnectorCount = Number(routeQuality.long_logical_connector_count ?? 0);
   const idleRatio = Number(allocationQuality.fleet_idle_time_ratio ?? idleTimeRatio(diagnostics));
   const unreachableCells = Number(coverageQuality.unreachable_cells_count ?? 0);
+  const segmentCount = Number(segmentQuality.segment_count_total ?? 0);
+  const segmentWorkloadBalance = Number(segmentQuality.segment_workload_balance ?? 0);
   const stuckCount = (state?.active_commands || []).filter((command) => {
     const progress = typeof command.progress === "number" ? command.progress : null;
     return progress !== null && progress <= 0 && (command.remaining_path || []).length === 0;
@@ -124,6 +127,12 @@ export function evaluateAcceptance(state: SimulationState | undefined, commandLo
       label: "Long logical connectors",
       status: longLogicalConnectorCount === 0 && maxLogicalConnectorLength <= 10 ? "PASS" : "WARN",
       detail: `${longLogicalConnectorCount} long, max ${maxLogicalConnectorLength.toFixed(1)} cells`,
+    },
+    {
+      id: "segment_planner",
+      label: "Segment sweep planner",
+      status: segmentCount > 0 ? "PASS" : "WARN",
+      detail: `${segmentCount} segments, balance ${segmentWorkloadBalance.toFixed(3)}`,
     },
     {
       id: "idle_ratio",

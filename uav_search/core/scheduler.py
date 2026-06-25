@@ -25,11 +25,12 @@ from uav_search.core.event_manager import EventManager
 from uav_search.maps.grid_map import GridMap
 from uav_search.maps.map_updater import MapUpdater
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
+from uav_search.planning.coverage_planner import create_coverage_planner
 from uav_search.planning.path_planner import PathPlanner
 from uav_search.planning.reachability import ReachabilityIndex, build_reachability_index
 from uav_search.planning.reachability import connected_components as reachability_components
 from uav_search.task.task_generator import estimate_task_cost
-from uav_search.task.task_generator import connected_components, generate_boustrophedon_path, generate_initial_tasks, nearest_cell
+from uav_search.task.task_generator import connected_components, generate_boustrophedon_path, nearest_cell
 from uav_search.task.task_generator import reorder_waypoints_for_uav
 from uav_search.task.task_manager import TaskManager
 from uav_search.uav.fleet_manager import FleetManager
@@ -101,6 +102,7 @@ class Scheduler:
         self.fleet = fleet
         self.config = config
         self.planner = PathPlanner(config.get("planning", {}))
+        self.coverage_planner = create_coverage_planner(config)
         self.map_updater = MapUpdater(grid_map)
         self.auction = SequentialAuction({**config, "battery_threshold": config["uav"]["battery_threshold"]})
         self.task_manager = TaskManager()
@@ -360,7 +362,7 @@ class Scheduler:
                     target=coverage_waypoints[-1],
                     path=route,
                     reason="auction_search_task",
-                    metadata={"logical_waypoints": self._positions_to_dicts(coverage_waypoints)},
+                    metadata=self._command_metadata_for_task(task, coverage_waypoints),
                 )
             )
 
@@ -515,17 +517,17 @@ class Scheduler:
         self._refresh_reachability()
         active_states = [state for state in states if state.status != UAVStatus.OFFLINE]
         searchable_cells = set(self.grid_map.get_searchable_cells()) - self._reachability.unreachable_searchable_cells
-        tasks = generate_initial_tasks(
+        tasks = self.coverage_planner.plan_initial_tasks(
             grid_map=self.grid_map,
-            uav_count=max(1, len(active_states)),
+            uav_states=active_states,
             sensor_radius_cells=int(self.config["uav"]["sensor_radius_cells"]),
-            home=states[0].home_position,
-            origins=[state.position for state in active_states] or [states[0].home_position],
             created_at=now,
+            reachability=self._reachability,
             searchable_cells=searchable_cells,
         )
         for task in tasks:
-            self._set_allowed_uavs_for_task(task)
+            if task.allowed_uav_ids is None:
+                self._set_allowed_uavs_for_task(task)
         self.task_manager.add_tasks(tasks)
         self._initialized = True
 
@@ -568,6 +570,11 @@ class Scheduler:
 
     def _positions_to_dicts(self, positions: list[Position]) -> list[dict[str, int]]:
         return [{"x": point.x, "y": point.y} for point in positions]
+
+    def _command_metadata_for_task(self, task: Task, logical_waypoints: list[Position]) -> dict[str, Any]:
+        metadata = dict(task.metadata)
+        metadata["logical_waypoints"] = self._positions_to_dicts(logical_waypoints)
+        return metadata
 
     def _refresh_task_progress(self, now: float) -> list[DecisionCommand]:
         coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
@@ -678,6 +685,8 @@ class Scheduler:
         available_uavs = self.fleet.get_available_uavs()
         if not available_uavs:
             return
+        if any(task.type == TaskType.SEARCH for task in self._allocatable_pending_tasks()):
+            return
 
         candidates = self._get_supplemental_candidates()
         if not candidates:
@@ -688,23 +697,38 @@ class Scheduler:
             if len(tasks) >= len(available_uavs):
                 break
             self._supplemental_task_seq += 1
-            tasks.append(
-                Task(
-                    id=f"supplemental_{self._supplemental_task_seq:03d}",
-                    type=TaskType.SEARCH,
-                    priority=max(self.grid_map.get_cell(cell).search_priority for cell in candidate.cells),
-                    target_cells=set(candidate.cells),
-                    entry_point=candidate.entry_point,
-                    waypoints=candidate.waypoints,
-                    coverage_waypoints=list(candidate.waypoints),
-                    estimated_cost_m=candidate.estimated_cost_m,
+            task_id = f"supplemental_{self._supplemental_task_seq:03d}"
+            large_region = candidate.uncovered_cells >= int(self.config["search"].get("large_supplemental_region_cells", 16))
+            planned_task = None
+            if large_region:
+                planned_task = self.coverage_planner.plan_region_task(
+                    task_id=task_id,
+                    region=set(candidate.cells),
+                    origin=candidate.entry_point,
+                    grid_map=self.grid_map,
+                    sensor_radius_cells=int(self.config["uav"]["sensor_radius_cells"]),
                     created_at=now,
-                    updated_at=now,
-                    uncovered_value=candidate.uncovered_value,
-                    priority_value=candidate.priority_value,
-                    score=candidate.score,
+                    reachability=self._reachability,
                     allowed_uav_ids=set(candidate.allowed_uav_ids) if candidate.allowed_uav_ids else None,
                 )
+            tasks.append(
+                planned_task
+                or Task(
+                        id=task_id,
+                        type=TaskType.SEARCH,
+                        priority=max(self.grid_map.get_cell(cell).search_priority for cell in candidate.cells),
+                        target_cells=set(candidate.cells),
+                        entry_point=candidate.entry_point,
+                        waypoints=candidate.waypoints,
+                        coverage_waypoints=list(candidate.waypoints),
+                        estimated_cost_m=candidate.estimated_cost_m,
+                        created_at=now,
+                        updated_at=now,
+                        uncovered_value=candidate.uncovered_value,
+                        priority_value=candidate.priority_value,
+                        score=candidate.score,
+                        allowed_uav_ids=set(candidate.allowed_uav_ids) if candidate.allowed_uav_ids else None,
+                    )
             )
         self.task_manager.add_tasks(tasks)
 
@@ -960,6 +984,17 @@ class Scheduler:
             task.last_replan_time = now
             task.replan_count += 1
             self.replan_count += 1
+            commands.append(
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.REPLAN,
+                    task_id=task.id,
+                    target=useful_waypoints[-1],
+                    path=route,
+                    reason="active_search_trim_replan",
+                    metadata={**self._command_metadata_for_task(task, useful_waypoints), "status": UAVStatus.SEARCHING.value},
+                )
+            )
         return commands
 
     def _should_replan_active_search(
@@ -1322,7 +1357,7 @@ class Scheduler:
                     target=goal,
                     path=route,
                     reason="map_update",
-                    metadata={"status": state.status.value, "logical_waypoints": self._positions_to_dicts(waypoints)},
+                    metadata={**(self._command_metadata_for_task(task, waypoints) if task is not None else {}), "status": state.status.value},
                 )
             )
         return commands
@@ -1399,27 +1434,15 @@ class Scheduler:
         }
         if not allowed_uav_ids:
             return None
-        waypoints = generate_boustrophedon_path(region, int(self.config["uav"]["sensor_radius_cells"]))
-        if not waypoints:
-            return None
-        waypoints = reorder_waypoints_for_uav(waypoints, origin)
         self._supplemental_task_seq += 1
-        uncovered_value, priority_value = self._weighted_region_value(region)
-        estimated_cost_m = estimate_task_cost(waypoints, waypoints[0], self.grid_map.resolution_m)
-        return Task(
-            id=f"{prefix}_{self._supplemental_task_seq:03d}",
-            type=TaskType.SEARCH,
-            priority=max(self.grid_map.get_cell(cell).search_priority for cell in region),
-            target_cells=set(region),
-            entry_point=waypoints[0],
-            waypoints=waypoints,
-            coverage_waypoints=list(waypoints),
-            estimated_cost_m=estimated_cost_m,
+        return self.coverage_planner.plan_region_task(
+            task_id=f"{prefix}_{self._supplemental_task_seq:03d}",
+            region=region,
+            origin=origin,
+            grid_map=self.grid_map,
+            sensor_radius_cells=int(self.config["uav"]["sensor_radius_cells"]),
             created_at=now,
-            updated_at=now,
-            uncovered_value=uncovered_value,
-            priority_value=priority_value,
-            score=(uncovered_value + priority_value) / max(estimated_cost_m, 1.0),
+            reachability=self._reachability,
             allowed_uav_ids=allowed_uav_ids,
         )
 
@@ -1756,5 +1779,5 @@ class Scheduler:
             target=waypoints[-1],
             path=route,
             reason="resume_interrupted_search",
-            metadata={"logical_waypoints": self._positions_to_dicts(waypoints)},
+            metadata=self._command_metadata_for_task(task, waypoints),
         )

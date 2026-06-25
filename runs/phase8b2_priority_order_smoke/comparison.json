@@ -1,0 +1,38 @@
+{
+  "baseline_version": "baseline_sparse_boustrophedon",
+  "candidate_version": "segment_sweep_v1",
+  "scenarios": {
+    "area_search_2uav": {
+      "final_coverage_delta": 0.03401931961360771,
+      "time_to_95_delta_pct": 0.14492753623188406,
+      "total_distance_delta_pct": 0.27807051011548656,
+      "redundant_coverage_delta_pct": 1.116250380749315,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "post_95_search_distance_delta_pct": 0.0,
+      "workload_balance_delta": -0.03663159929980242,
+      "workload_balance_active_delta": -0.03663159929980242,
+      "segment_count_delta": 34.0,
+      "segment_workload_balance_delta": -0.06810035842293904,
+      "turn_rate_delta": -0.0030558432863854222,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    },
+    "area_search_5uav": {
+      "final_coverage_delta": -0.0027347310847767314,
+      "time_to_95_delta_pct": 0.06770833333333333,
+      "total_distance_delta_pct": 0.00383268539001621,
+      "redundant_coverage_delta_pct": 0.023491758011881907,
+      "post_95_extra_distance_delta_pct": 0.14482953206376845,
+      "post_95_search_distance_delta_pct": -0.5382524218523375,
+      "workload_balance_delta": 0.03165931679583833,
+      "workload_balance_active_delta": 0.03165931679583833,
+      "segment_count_delta": 27.0,
+      "segment_workload_balance_delta": -0.09308582608247551,
+      "turn_rate_delta": -0.003820663053361867,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0
+    }
+  }
+}
