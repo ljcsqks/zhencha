@@ -558,7 +558,7 @@ def test_small_ordinary_fragment_is_ignored_after_coverage_goal() -> None:
     assert scheduler._get_supplemental_candidates() == []
 
 
-def test_large_contiguous_region_is_searched_after_coverage_goal() -> None:
+def test_large_ordinary_region_is_not_searched_after_coverage_goal() -> None:
     config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     config["search"]["min_supplemental_score"] = 999.0
     grid_map = build_grid_map(config)
@@ -570,9 +570,8 @@ def test_large_contiguous_region_is_searched_after_coverage_goal() -> None:
     candidates = scheduler._get_supplemental_candidates()
 
     assert grid_map.coverage_rate() >= config["search"]["mission_complete_coverage_threshold"]
-    assert candidates
-    assert any(uncovered.issubset(candidate.cells) for candidate in candidates)
-    assert not scheduler._mission_goal_met()
+    assert candidates == []
+    assert scheduler._mission_goal_met()
 
 
 def test_priority_fragment_still_gets_supplemental_candidate() -> None:

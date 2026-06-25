@@ -1,0 +1,188 @@
+{
+  "run_id": "stress_obstacle_maze_3uav",
+  "algorithm_version": "segment_sweep_v1",
+  "code_version": "328ae63",
+  "config_hash": "d2f680a50d7e",
+  "final_time_s": 329.0,
+  "global_coverage": 0.95798755186722,
+  "priority_coverage": 1.0,
+  "redundant_coverage_rate": 0.46345425013535463,
+  "total_distance_m": 8637.645019878179,
+  "effective_search_distance_m": 7199.533188057743,
+  "path_efficiency": 0.8335064906567881,
+  "min_battery": 0.8288984688570642,
+  "event_count": 0,
+  "conflict_count": 0,
+  "no_fly_violations": 0,
+  "map_update_count": 0,
+  "target_found_count": 0,
+  "confirm_done_count": 0,
+  "time_to_95_coverage_s": 256.0,
+  "time_to_priority_coverage_s": 229.0,
+  "coverage_goal_met": true,
+  "priority_goal_met": true,
+  "turn_rate": 0.01192454653588585,
+  "replan_count": 9,
+  "coverage_gain_per_meter": 0.00010910698271615331,
+  "per_uav_workload_balance": 0.9211621940594595,
+  "target_response_time_s": null,
+  "target_confirm_duration_s": null,
+  "confirm_success_rate": 0.0,
+  "search_resume_delay_s": null,
+  "coverage_gap_at_confirm_done": 0.0,
+  "interrupted_task_resume_rate": 1.0,
+  "supplemental_task_count": 0,
+  "ignored_uncovered_cells": 81,
+  "final_uncovered_cells": 81,
+  "final_priority_uncovered_cells": 0,
+  "post_95_extra_time_s": 73.0,
+  "post_95_extra_distance_m": 1438.1118318204353,
+  "diagnostics": {
+    "per_uav": {
+      "uav_01": {
+        "assigned_area_cells": 709,
+        "newly_covered_cells": 709,
+        "repeated_covered_cells": 148,
+        "distance_m": 2532.132034355966,
+        "active_time_s": 252.0,
+        "idle_time_s": 77.0,
+        "idle_time_ratio": 0.23404255319148937,
+        "confirm_time_s": 0.0,
+        "replan_count": 9,
+        "turn_count": 19,
+        "average_coverage_gain_per_meter": 0.28000119677026647
+      },
+      "uav_02": {
+        "assigned_area_cells": 654,
+        "newly_covered_cells": 654,
+        "repeated_covered_cells": 187,
+        "distance_m": 3025.6854249492408,
+        "active_time_s": 302.0,
+        "idle_time_s": 27.0,
+        "idle_time_ratio": 0.08206686930091185,
+        "confirm_time_s": 0.0,
+        "replan_count": 9,
+        "turn_count": 45,
+        "average_coverage_gain_per_meter": 0.21614937052187821
+      },
+      "uav_03": {
+        "assigned_area_cells": 914,
+        "newly_covered_cells": 914,
+        "repeated_covered_cells": 224,
+        "distance_m": 3079.827560572972,
+        "active_time_s": 306.0,
+        "idle_time_s": 23.0,
+        "idle_time_ratio": 0.06990881458966565,
+        "confirm_time_s": 0.0,
+        "replan_count": 9,
+        "turn_count": 39,
+        "average_coverage_gain_per_meter": 0.2967698619561542
+      }
+    },
+    "route_quality": {
+      "approximate_crossing_count": 0,
+      "crossing_count": 0,
+      "long_connector_count": 0,
+      "average_connector_length": 1.0316833770994052,
+      "max_connector_length": 1.4142135623730951,
+      "long_logical_connector_count": 13,
+      "avg_logical_connector_length": 2.4830162764585966,
+      "max_logical_connector_length": 39.84971769034255,
+      "path_smoothness_score": 0.988215972646669,
+      "turn_rate": 0.01192454653588585
+    },
+    "coverage_quality": {
+      "uncovered_components_count_at_95": 4,
+      "largest_uncovered_component_at_95": 59,
+      "priority_uncovered_cells": 0,
+      "post_95_new_coverage_cells": 411,
+      "post_95_distance_m": 1438.1118318204353,
+      "post_95_search_distance_m": 42.426406871193194,
+      "post_95_return_distance_m": 1395.6854249492426,
+      "post_95_confirm_distance_m": 0.0,
+      "unreachable_cells_count": 0,
+      "unreachable_components_count": 0
+    },
+    "allocation_quality": {
+      "route_cost_estimate_per_uav": {
+        "uav_01": 2532.132034355966,
+        "uav_02": 3025.6854249492408,
+        "uav_03": 3079.827560572972
+      },
+      "actual_distance_per_uav": {
+        "uav_01": 2532.132034355966,
+        "uav_02": 3025.6854249492408,
+        "uav_03": 3079.827560572972
+      },
+      "actual_cost_per_uav": {
+        "uav_01": 2532.132034355966,
+        "uav_02": 3025.6854249492408,
+        "uav_03": 3079.827560572972
+      },
+      "workload_balance": 0.9211621940594595,
+      "workload_balance_all_uavs": 0.9211621940594595,
+      "workload_balance_active_uavs": 0.9211621940594595,
+      "fleet_idle_time_ratio": 0.1286727456940223,
+      "max_uav_finish_time": 328.0,
+      "min_uav_finish_time": 279.0,
+      "idle_uav_count_after_50_percent_coverage": 0,
+      "idle_uav_count_after_80_percent_coverage": 0
+    },
+    "segment_quality": {
+      "segment_count_total": 18,
+      "unique_segment_count": 18,
+      "segment_count_per_uav": {
+        "uav_03": 4,
+        "uav_01": 6,
+        "uav_02": 8
+      },
+      "estimated_connector_cost_per_uav": {
+        "uav_03": 1055.2691193451,
+        "uav_01": 276.5685424948,
+        "uav_02": 1119.4112549688
+      },
+      "estimated_sweep_cost_per_uav": {
+        "uav_03": 1290.0,
+        "uav_01": 2090.0,
+        "uav_02": 1520.0
+      },
+      "segment_bundle_cost_per_uav": {
+        "uav_02": 2639.4112549687998,
+        "uav_01": 2366.5685424948,
+        "uav_03": 2345.2691193451
+      },
+      "max_segment_bundle_cost": 2639.4112549687998,
+      "segment_workload_balance": 0.9481793108108062,
+      "average_segment_length": 286.94444444444446,
+      "max_segment_length": 348.3333333333333,
+      "segment_orientation": "vertical",
+      "generated_segment_count": 19,
+      "selected_segment_count": 18,
+      "dropped_low_gain_segment_count": 16,
+      "dropped_short_segment_count": 0,
+      "estimated_selected_coverage_cells": 1658,
+      "estimated_selected_priority_cells": 49,
+      "local_cluster_count": 13,
+      "astar_connector_cache_hits": 0,
+      "astar_connector_cache_misses": 108,
+      "unreachable_connector_count": 0,
+      "bundle_exchange_attempts": 58,
+      "bundle_exchange_accepted": 4,
+      "max_bundle_cost_before_exchange": 2927.9898987318,
+      "max_bundle_cost_after_exchange": 2709.4112549687998,
+      "total_bundle_cost_before_exchange": 8431.248916808701,
+      "total_bundle_cost_after_exchange": 7707.2489168087
+    },
+    "command_quality": {
+      "command_rejected_count": 0,
+      "rejected_reasons": {}
+    },
+    "scheduler_quality": {
+      "skipped_post_goal_supplemental_tasks": 255,
+      "post_goal_active_search_cancel_count": 1,
+      "late_stage_supplemental_count": 16,
+      "cancelled_post_goal_tasks": 1,
+      "skipped_low_gain_supplemental_count": 24
+    }
+  }
+}

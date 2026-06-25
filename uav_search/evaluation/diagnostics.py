@@ -51,12 +51,16 @@ def compute_diagnostics(
     coverage_quality.update(reachability_quality)
     allocation_quality = _allocation_quality(per_uav, snapshots)
     segment_quality = _segment_quality(snapshots)
+    command_quality = _command_quality(snapshots)
+    scheduler_quality = _scheduler_quality(snapshots)
     return {
         "per_uav": per_uav,
         "route_quality": route_quality,
         "coverage_quality": coverage_quality,
         "allocation_quality": allocation_quality,
         "segment_quality": segment_quality,
+        "command_quality": command_quality,
+        "scheduler_quality": scheduler_quality,
     }
 
 
@@ -177,6 +181,27 @@ def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     sweep_cost_per_uav: dict[str, float] = {}
     orientations: list[str] = []
     seen_segment_ids: set[tuple[str, str]] = set()
+    planner_summary = {
+        "generated_segment_count": 0,
+        "selected_segment_count": 0,
+        "dropped_low_gain_segment_count": 0,
+        "dropped_short_segment_count": 0,
+        "estimated_selected_coverage_cells": 0,
+        "estimated_selected_priority_cells": 0,
+        "local_cluster_count": 0,
+        "astar_connector_cache_hits": 0,
+        "astar_connector_cache_misses": 0,
+        "unreachable_connector_count": 0,
+        "bundle_exchange_attempts": 0,
+        "bundle_exchange_accepted": 0,
+    }
+    planner_summary_float = {
+        "max_bundle_cost_before_exchange": 0.0,
+        "max_bundle_cost_after_exchange": 0.0,
+        "total_bundle_cost_before_exchange": 0.0,
+        "total_bundle_cost_after_exchange": 0.0,
+    }
+    seen_planner_summary_keys: set[tuple[str, tuple[str, ...]]] = set()
     for snapshot in snapshots:
         for command in snapshot.get("commands", []):
             metadata = command.get("metadata") or {}
@@ -200,6 +225,13 @@ def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
             orientation = metadata.get("segment_orientation")
             if isinstance(orientation, str):
                 orientations.append(orientation)
+            summary_key = (uav_id, tuple(segment_ids))
+            if segment_ids and summary_key not in seen_planner_summary_keys:
+                seen_planner_summary_keys.add(summary_key)
+                for key in planner_summary:
+                    planner_summary[key] = max(planner_summary[key], int(float(metadata.get(key, 0) or 0)))
+                for key in planner_summary_float:
+                    planner_summary_float[key] = max(planner_summary_float[key], float(metadata.get(key, 0.0) or 0.0))
 
     bundle_costs = {
         uav_id: connector_cost_per_uav.get(uav_id, 0.0) + sweep_cost_per_uav.get(uav_id, 0.0)
@@ -224,7 +256,50 @@ def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "average_segment_length": sum(segment_lengths) / len(segment_lengths) if segment_lengths else 0.0,
         "max_segment_length": max(segment_lengths, default=0.0),
         "segment_orientation": _dominant_value(orientations),
+        **planner_summary,
+        **planner_summary_float,
     }
+
+
+def _command_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    seen_acks: set[tuple[str, str]] = set()
+    rejected_reasons: dict[str, int] = {}
+    rejected_count = 0
+    for snapshot in snapshots:
+        for ack in snapshot.get("command_acks", []):
+            command_id = str(ack.get("command_id", ""))
+            status = str(ack.get("status", "")).lower()
+            key = (command_id, status)
+            if not command_id or key in seen_acks:
+                continue
+            seen_acks.add(key)
+            if status not in {"rejected", "failed"}:
+                continue
+            rejected_count += 1
+            reason = str(ack.get("reason") or "unknown")
+            rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+    return {
+        "command_rejected_count": rejected_count,
+        "rejected_reasons": rejected_reasons,
+    }
+
+
+def _scheduler_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    keys = {
+        "cancelled_post_goal_tasks",
+        "skipped_post_goal_supplemental_tasks",
+        "post_goal_active_search_cancel_count",
+        "skipped_low_gain_supplemental_count",
+        "late_stage_supplemental_count",
+    }
+    result = {key: 0 for key in keys}
+    for snapshot in snapshots:
+        diagnostics = snapshot.get("scheduler_diagnostics") or {}
+        if not isinstance(diagnostics, dict):
+            continue
+        for key in keys:
+            result[key] = max(result[key], int(diagnostics.get(key, 0) or 0))
+    return result
 
 
 def _coverage_quality(grid_map: GridMap, snapshots: list[dict[str, Any]]) -> dict[str, Any]:

@@ -304,6 +304,7 @@ class Simulator:
                 "replan_count": scheduler.replan_count if scheduler is not None else 0,
                 "target_metrics": scheduler.target_metrics_snapshot() if scheduler is not None else {},
                 "tasks": scheduler.task_status_snapshot() if scheduler is not None else {},
+                "scheduler_diagnostics": scheduler.diagnostics_snapshot() if scheduler is not None else {},
                 "commands": [
                     _command_to_snapshot(command)
                     for command in (commands if commands is not None else self._last_commands)

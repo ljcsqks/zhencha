@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uav_search.core.data_types import CellType, Position, UAVState, UAVStatus
+from uav_search.core.data_types import CellType, CommandType, Position, Task, TaskStatus, TaskType, UAVState, UAVStatus
 from uav_search.core.scheduler import Scheduler
 from uav_search.maps.grid_map import GridMap
 from uav_search.uav.fleet_manager import FleetManager
@@ -112,3 +112,76 @@ def test_supplemental_tasks_wait_until_pending_search_tasks_are_allocated() -> N
     scheduler._ensure_supplemental_search_tasks(now=0.0)
 
     assert len(scheduler.task_manager.tasks) == initial_count
+
+
+def test_post_goal_does_not_create_ordinary_supplemental_and_cancels_pending() -> None:
+    grid_map = GridMap(width_m=50, height_m=50, resolution_m=10)
+    for cell in grid_map.get_searchable_cells():
+        grid_map.set_cell(cell, {"search_confidence": 1.0})
+    scheduler = Scheduler(grid_map, _fleet(), _config())
+    pending = Task(
+        id="supplemental_001",
+        type=TaskType.SEARCH,
+        priority=1.0,
+        target_cells={Position(1, 1)},
+        entry_point=Position(1, 1),
+        coverage_waypoints=[Position(1, 1)],
+        metadata={"supplemental": True},
+    )
+    scheduler.task_manager.add_tasks([pending])
+
+    scheduler._ensure_supplemental_search_tasks(now=5.0)
+
+    assert scheduler.task_manager.tasks["supplemental_001"].status == TaskStatus.CANCELLED
+    assert scheduler.diagnostics_snapshot()["skipped_post_goal_supplemental_tasks"] >= 1
+
+
+def test_post_goal_active_ordinary_search_gets_hold() -> None:
+    grid_map = GridMap(width_m=50, height_m=50, resolution_m=10)
+    for cell in grid_map.get_searchable_cells():
+        grid_map.set_cell(cell, {"search_confidence": 1.0})
+    fleet = _fleet(Position(0, 0))
+    uav = fleet.get_uav("uav_01").state
+    uav.status = UAVStatus.SEARCHING
+    uav.current_task_id = "search_001"
+    uav.path = [Position(0, 0), Position(1, 0)]
+    scheduler = Scheduler(grid_map, fleet, _config())
+    task = Task(
+        id="search_001",
+        type=TaskType.SEARCH,
+        priority=1.0,
+        target_cells={Position(1, 0)},
+        entry_point=Position(1, 0),
+        status=TaskStatus.IN_PROGRESS,
+        assigned_uav_id="uav_01",
+        coverage_waypoints=[Position(1, 0)],
+    )
+    scheduler.task_manager.add_tasks([task])
+
+    commands = scheduler._stop_search_tasks_after_coverage_goal(now=5.0)
+
+    assert commands
+    assert commands[0].command == CommandType.HOLD
+    assert scheduler.diagnostics_snapshot()["post_goal_active_search_cancel_count"] == 1
+
+
+def test_post_goal_keeps_priority_remaining_task() -> None:
+    grid_map = GridMap(width_m=50, height_m=50, resolution_m=10)
+    for cell in grid_map.get_searchable_cells():
+        grid_map.set_cell(cell, {"search_confidence": 1.0})
+    priority_cell = Position(2, 2)
+    grid_map.set_cell(priority_cell, {"search_priority": 3.0, "search_confidence": 0.0})
+    scheduler = Scheduler(grid_map, _fleet(), _config())
+    task = Task(
+        id="priority_001",
+        type=TaskType.SEARCH,
+        priority=3.0,
+        target_cells={priority_cell},
+        entry_point=priority_cell,
+        coverage_waypoints=[priority_cell],
+    )
+    scheduler.task_manager.add_tasks([task])
+
+    tasks = scheduler._allocatable_pending_tasks()
+
+    assert [item.id for item in tasks] == ["priority_001"]

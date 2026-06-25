@@ -4,7 +4,7 @@ import pytest
 
 from uav_search.core.data_types import CellType, Position, UAVState, UAVStatus
 from uav_search.maps.grid_map import GridMap
-from uav_search.planning.coverage_planner import SegmentSweepPlanner, create_coverage_planner
+from uav_search.planning.coverage_planner import SegmentConnectorCostCache, SegmentSweepPlanner, SweepSegment, create_coverage_planner
 from uav_search.planning.reachability import build_reachability_index
 
 
@@ -98,3 +98,108 @@ def test_segment_sweep_initial_tasks_are_preassigned_bundles_with_metadata() -> 
     for task in tasks:
         assert len(task.metadata["segment_ids"]) == len(set(task.metadata["segment_ids"]))
     assert len({tuple(task.coverage_waypoints) for task in tasks}) == len(tasks)
+
+
+def test_segment_selection_stops_after_coverage_goal_and_keeps_priority() -> None:
+    grid_map = GridMap(width_m=100, height_m=50, resolution_m=10)
+    grid_map.set_cell(Position(8, 0), {"search_priority": 3.0})
+    uavs = [_uav("uav_01", Position(0, 0))]
+    reachability = build_reachability_index(grid_map, uavs)
+    planner = SegmentSweepPlanner(
+        {
+            "search": {"mission_complete_coverage_threshold": 0.5, "priority_complete_threshold": 1.0},
+            "algorithm": {"segment_sweep": {"coverage_margin": 0.0, "max_initial_coverage_target": 0.55}},
+        }
+    )
+
+    segments = planner.generate_segments(
+        searchable_cells=set(grid_map.get_searchable_cells()),
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=1,
+        reachability=reachability,
+    )
+    selected = planner.select_segments_for_coverage_goal(
+        segments,
+        grid_map,
+        mission_complete_coverage_threshold=0.5,
+        priority_complete_threshold=1.0,
+    )
+
+    assert 0 < len(selected) < len(segments)
+    assert any(Position(8, 0) in segment.coverage_cells for segment in selected)
+    assert planner.last_diagnostics["generated_segment_count"] == len(segments)
+    assert planner.last_diagnostics["selected_segment_count"] == len(selected)
+
+
+def test_connector_cache_uses_astar_cost_and_reuses_hits() -> None:
+    grid_map = GridMap(width_m=70, height_m=50, resolution_m=10)
+    for y in range(4):
+        grid_map.set_cell(Position(3, y), {"cell_type": CellType.OBSTACLE})
+    cache = SegmentConnectorCostCache(planner_run_id="test")
+
+    cost = cache.cost(Position(0, 0), Position(6, 0), grid_map)
+    cached = cache.cost(Position(0, 0), Position(6, 0), grid_map)
+
+    assert cost > 6 * grid_map.resolution_m
+    assert cached == cost
+    assert cache.misses == 1
+    assert cache.hits == 1
+
+
+def test_unreachable_connector_is_not_selected_for_assignment() -> None:
+    grid_map = GridMap(width_m=70, height_m=50, resolution_m=10)
+    for y in range(5):
+        grid_map.set_cell(Position(3, y), {"cell_type": CellType.OBSTACLE})
+    uav = _uav("uav_01", Position(0, 0))
+    segment = SweepSegment(
+        id="blocked",
+        component_id="c1",
+        orientation="horizontal",
+        line_index=0,
+        start=Position(5, 0),
+        end=Position(6, 0),
+        sampled_waypoints=[Position(5, 0), Position(6, 0)],
+        coverage_cells={Position(5, 0), Position(6, 0)},
+        priority_value=0.0,
+        uncovered_value=2.0,
+        allowed_uav_ids={"uav_01"},
+        sweep_cost_m=10.0,
+    )
+    planner = SegmentSweepPlanner({})
+
+    bundles = planner.assign_segments_to_uavs([segment], [uav], grid_map)
+
+    assert bundles["uav_01"] == []
+    assert planner.last_diagnostics["unreachable_connector_count"] >= 1
+
+
+def test_bundle_exchange_reduces_max_cost_without_losing_segments() -> None:
+    grid_map = GridMap(width_m=100, height_m=40, resolution_m=10)
+    planner = SegmentSweepPlanner({"algorithm": {"segment_sweep": {"bundle_exchange_iterations": 20}}})
+    uavs = [_uav("uav_01", Position(0, 0)), _uav("uav_02", Position(9, 0))]
+    segments = [
+        SweepSegment(
+            id=f"s{i}",
+            component_id="c1",
+            orientation="horizontal",
+            line_index=i,
+            start=Position(i, 0),
+            end=Position(i + 1, 0),
+            sampled_waypoints=[Position(i, 0), Position(i + 1, 0)],
+            coverage_cells={Position(i, 0), Position(i + 1, 0)},
+            priority_value=0.0,
+            uncovered_value=2.0,
+            allowed_uav_ids={"uav_01", "uav_02"},
+            sweep_cost_m=10.0,
+        )
+        for i in range(5)
+    ]
+    bundles = {"uav_01": segments, "uav_02": []}
+    before = planner.bundle_costs(bundles, uavs, grid_map)
+
+    improved = planner.improve_segment_bundles(bundles, uavs, grid_map)
+    after = planner.bundle_costs(improved, uavs, grid_map)
+
+    assert max(after.values()) < max(before.values())
+    assert sorted(segment.id for bundle in improved.values() for segment in bundle) == [segment.id for segment in segments]

@@ -97,6 +97,8 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
         "coverage_quality",
         "allocation_quality",
         "segment_quality",
+        "command_quality",
+        "scheduler_quality",
     }
     assert "uav_01" in metrics.diagnostics["per_uav"]
     assert "max_connector_length" in metrics.diagnostics["route_quality"]

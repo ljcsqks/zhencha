@@ -28,6 +28,14 @@ DELTA_FIELDS = {
     "interrupted_task_resume_rate_delta": ("interrupted_task_resume_rate", "diff"),
 }
 
+ABSOLUTE_DELTA_FIELDS = {
+    "post_95_extra_distance_delta_abs": "post_95_extra_distance_m",
+    "post_95_search_distance_delta_abs": "diagnostics.coverage_quality.post_95_search_distance_m",
+    "supplemental_task_count_delta_abs": "supplemental_task_count",
+    "task_route_not_found_delta_abs": "diagnostics.command_quality.rejected_reasons.task_route_not_found",
+    "command_rejected_count_delta_abs": "diagnostics.command_quality.command_rejected_count",
+}
+
 
 def compare_algorithms(
     *,
@@ -65,17 +73,26 @@ def compare_algorithms(
 
 
 def _compare_rows(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, float]:
-    return {
+    return compare_metric_rows(baseline, candidate)
+
+
+def compare_metric_rows(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, float | None]:
+    deltas: dict[str, float | None] = {
         output_field: _delta(_value(baseline, source_field), _value(candidate, source_field), mode)
         for output_field, (source_field, mode) in DELTA_FIELDS.items()
     }
+    for output_field, source_field in ABSOLUTE_DELTA_FIELDS.items():
+        deltas[output_field] = _delta(_value(baseline, source_field), _value(candidate, source_field), "diff")
+    return deltas
 
 
 def _delta(baseline: float | None, candidate: float | None, mode: str) -> float:
     base = 0.0 if baseline is None else float(baseline)
     cand = 0.0 if candidate is None else float(candidate)
     if mode == "pct":
-        return 0.0 if abs(base) < 1e-12 else (cand - base) / abs(base)
+        if abs(base) < 1e-12:
+            return 0.0 if abs(cand) < 1e-12 else None
+        return (cand - base) / abs(base)
     return cand - base
 
 
@@ -119,20 +136,29 @@ def _write_markdown(path: Path, comparison: dict[str, Any]) -> None:
         f"- Baseline: `{comparison['baseline_version']}`",
         f"- Candidate: `{comparison['candidate_version']}`",
         "",
-        "| Scenario | Coverage delta | Time95 delta % | Distance delta % | Redundant delta % | Workload delta | Unique segments delta | No-fly delta |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Scenario | Coverage delta | Time95 delta % | Distance delta % | Redundant delta % | Post-95 search abs | Supplemental abs | Route-not-found abs | Workload delta | Unique segments delta | No-fly delta |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for scenario, deltas in comparison["scenarios"].items():
         lines.append(
-            f"| {scenario} | {deltas['final_coverage_delta']:.6f} | "
-            f"{deltas['time_to_95_delta_pct']:.6f} | "
-            f"{deltas['total_distance_delta_pct']:.6f} | "
-            f"{deltas['redundant_coverage_delta_pct']:.6f} | "
-            f"{deltas['workload_balance_delta']:.6f} | "
-            f"{deltas['unique_segment_count_delta']:.6f} | "
-            f"{deltas['no_fly_violations_delta']:.6f} |"
+            f"| {scenario} | {_fmt_delta(deltas['final_coverage_delta'])} | "
+            f"{_fmt_delta(deltas['time_to_95_delta_pct'])} | "
+            f"{_fmt_delta(deltas['total_distance_delta_pct'])} | "
+            f"{_fmt_delta(deltas['redundant_coverage_delta_pct'])} | "
+            f"{_fmt_delta(deltas['post_95_search_distance_delta_abs'])} | "
+            f"{_fmt_delta(deltas['supplemental_task_count_delta_abs'])} | "
+            f"{_fmt_delta(deltas['task_route_not_found_delta_abs'])} | "
+            f"{_fmt_delta(deltas['workload_balance_delta'])} | "
+            f"{_fmt_delta(deltas['unique_segment_count_delta'])} | "
+            f"{_fmt_delta(deltas['no_fly_violations_delta'])} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _fmt_delta(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.6f}"
 
 
 def main() -> None:

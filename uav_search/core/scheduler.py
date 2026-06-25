@@ -45,6 +45,7 @@ class SupplementalCandidate:
     priority_value: float
     nearest_uav_distance: float
     estimated_cost_m: float
+    gain_per_meter: float
     score: float
     entry_point: Position
     waypoints: list[Position]
@@ -115,6 +116,13 @@ class Scheduler:
         self._ack_events_handled: list[str] = []
         self._initialized = False  # 标记是否已生成初始任务
         self._supplemental_task_seq = 0
+        self._diagnostics: dict[str, int] = {
+            "cancelled_post_goal_tasks": 0,
+            "skipped_post_goal_supplemental_tasks": 0,
+            "post_goal_active_search_cancel_count": 0,
+            "skipped_low_gain_supplemental_count": 0,
+            "late_stage_supplemental_count": 0,
+        }
         self._reachability: ReachabilityIndex = build_reachability_index(self.grid_map, self.fleet.get_all_states())
         self._unreachable_components: list[set[Position]] = reachability_components(
             self.grid_map,
@@ -161,6 +169,9 @@ class Scheduler:
             for task_id, record in sorted(self._confirmations.items())
         ]
         return {"status_counts": status_counts, "confirmations": confirmations}
+
+    def diagnostics_snapshot(self) -> dict[str, int]:
+        return dict(self._diagnostics)
 
     def remember_control_commands(self, commands: list[ControlCommand]) -> None:
         for command in commands:
@@ -594,13 +605,17 @@ class Scheduler:
         for task in list(self.task_manager.tasks.values()):
             if task.type != TaskType.SEARCH or task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED):
                 continue
+            if self._task_has_priority_remaining(task):
+                continue
             uav: UAVState | None = None
             if task.assigned_uav_id is not None:
                 uav = self.fleet.get_uav(task.assigned_uav_id).state
             self.task_manager.complete_task(task.id, now=now)
+            self._diagnostics["cancelled_post_goal_tasks"] += 1
             if uav is None or uav.status != UAVStatus.SEARCHING:
                 continue
             commanded_uavs.add(uav.id)
+            self._diagnostics["post_goal_active_search_cancel_count"] += 1
             commands.append(
                 DecisionCommand(
                     uav_id=uav.id,
@@ -609,6 +624,7 @@ class Scheduler:
                     target=uav.position,
                     path=[],
                     reason="mission_coverage_goal_met",
+                    metadata={"post_goal_stop": True},
                 )
             )
         for uav in self.fleet.get_all_states():
@@ -642,6 +658,8 @@ class Scheduler:
         tasks: list[Task] = []
         states_by_id = {state.id: state for state in self.fleet.get_all_states()}
         for task in self.task_manager.get_pending_tasks():
+            if self._coverage_goal_reached() and task.type == TaskType.SEARCH and not self._task_has_priority_remaining(task):
+                continue
             if task.resume_owner_id is None:
                 tasks.append(task)
                 continue
@@ -685,6 +703,13 @@ class Scheduler:
         available_uavs = self.fleet.get_available_uavs()
         if not available_uavs:
             return
+        if self._coverage_goal_reached():
+            self._cancel_pending_ordinary_supplemental(now)
+            self._diagnostics["skipped_post_goal_supplemental_tasks"] += 1
+            return
+        if self._supplemental_task_seq >= int(self.config["search"].get("max_supplemental_tasks_per_run", 1_000_000)):
+            self._diagnostics["skipped_low_gain_supplemental_count"] += 1
+            return
         if any(task.type == TaskType.SEARCH for task in self._allocatable_pending_tasks()):
             return
 
@@ -711,6 +736,15 @@ class Scheduler:
                     reachability=self._reachability,
                     allowed_uav_ids=set(candidate.allowed_uav_ids) if candidate.allowed_uav_ids else None,
                 )
+                if planned_task is not None:
+                    planned_task.metadata.update(
+                        {
+                            "supplemental": True,
+                            "gain_per_meter": candidate.gain_per_meter,
+                            "new_coverage_gain": candidate.uncovered_cells,
+                            "estimated_connector_cost_m": candidate.nearest_uav_distance,
+                        }
+                    )
             tasks.append(
                 planned_task
                 or Task(
@@ -728,6 +762,12 @@ class Scheduler:
                         priority_value=candidate.priority_value,
                         score=candidate.score,
                         allowed_uav_ids=set(candidate.allowed_uav_ids) if candidate.allowed_uav_ids else None,
+                        metadata={
+                            "supplemental": True,
+                            "gain_per_meter": candidate.gain_per_meter,
+                            "new_coverage_gain": candidate.uncovered_cells,
+                            "estimated_connector_cost_m": candidate.nearest_uav_distance,
+                        },
                     )
             )
         self.task_manager.add_tasks(tasks)
@@ -827,6 +867,7 @@ class Scheduler:
         value = uncovered_value + priority_value
         cost = float(self.config["search"].get("distance_cost_weight", 1.0)) * max(estimated_cost_m, 1.0)
         score = value / cost
+        gain_per_meter = len(region) / max(estimated_cost_m, 1.0)
         priority_uncovered_cells = sum(1 for cell in region if self.grid_map.get_cell(cell).search_priority > 1.0)
         return SupplementalCandidate(
             cells=set(region),
@@ -836,6 +877,7 @@ class Scheduler:
             priority_value=priority_value,
             nearest_uav_distance=nearest_distance,
             estimated_cost_m=estimated_cost_m,
+            gain_per_meter=gain_per_meter,
             score=score,
             entry_point=entry_point,
             waypoints=waypoints,
@@ -858,8 +900,22 @@ class Scheduler:
         if priority_exception:
             return True
         if self._coverage_goal_reached():
-            return candidate.priority_uncovered_cells > 0 or candidate.uncovered_cells >= self._post_goal_ordinary_min_cells()
-        if candidate.uncovered_cells < int(search_config.get("min_supplemental_cells", 8)):
+            self._diagnostics["skipped_post_goal_supplemental_tasks"] += 1
+            return False
+        if self.grid_map.coverage_rate() >= float(search_config.get("late_stage_coverage_threshold", 0.93)):
+            if candidate.priority_uncovered_cells > 0:
+                self._diagnostics["late_stage_supplemental_count"] += 1
+                return True
+            if candidate.uncovered_cells < int(search_config.get("late_stage_min_supplemental_cells", 24)):
+                self._diagnostics["skipped_low_gain_supplemental_count"] += 1
+                return False
+            if candidate.gain_per_meter < float(search_config.get("late_stage_min_gain_per_meter", 0.05)):
+                self._diagnostics["skipped_low_gain_supplemental_count"] += 1
+                return False
+            self._diagnostics["late_stage_supplemental_count"] += 1
+        early_min_cells = 1 if self.config.get("algorithm", {}).get("version") == "segment_sweep_v1" else int(search_config.get("min_supplemental_cells", 8))
+        if candidate.uncovered_cells < early_min_cells:
+            self._diagnostics["skipped_low_gain_supplemental_count"] += 1
             return False
         if candidate.uncovered_cells >= int(search_config.get("large_supplemental_region_cells", 16)):
             return True
@@ -887,6 +943,25 @@ class Scheduler:
 
     def _has_valuable_supplemental_candidates(self) -> bool:
         return bool(self._get_supplemental_candidates())
+
+    def _task_has_priority_remaining(self, task: Task) -> bool:
+        coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
+        return any(
+            self.grid_map.get_cell(cell).search_priority > 1.0
+            and self.grid_map.get_cell(cell).search_confidence < coverage_threshold
+            for cell in task.target_cells
+            if self.grid_map.is_passable(cell)
+        )
+
+    def _cancel_pending_ordinary_supplemental(self, now: float) -> None:
+        for task in self.task_manager.get_pending_tasks():
+            if task.type != TaskType.SEARCH or not str(task.id).startswith("supplemental_"):
+                continue
+            if self._task_has_priority_remaining(task):
+                continue
+            task.status = TaskStatus.CANCELLED
+            task.updated_at = now
+            self._diagnostics["cancelled_post_goal_tasks"] += 1
 
     def _get_reserved_search_cells(self) -> set[Position]:
         reserved: set[Position] = set()
