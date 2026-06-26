@@ -9,6 +9,7 @@ from uav_search.planning.coverage_planner import (
     ComponentComplexityAnalyzer,
     SegmentConnectorCostCache,
     SegmentSweepPlanner,
+    SweepCluster,
     SweepSegment,
     create_coverage_planner,
     simulate_planned_coverage,
@@ -26,6 +27,48 @@ def _uav(uav_id: str, position: Position) -> UAVState:
         sensor_radius_cells=1,
         status=UAVStatus.IDLE,
         home_position=position,
+    )
+
+
+def _segment(segment_id: str, start: Position, end: Position, allowed: set[str] | None = None) -> SweepSegment:
+    return SweepSegment(
+        id=segment_id,
+        component_id="c1",
+        orientation="horizontal",
+        line_index=int(segment_id.strip("s") or 0),
+        start=start,
+        end=end,
+        sampled_waypoints=[start, end],
+        coverage_cells={start, end},
+        priority_value=0.0,
+        uncovered_value=2.0,
+        allowed_uav_ids=set(allowed or {"uav_01", "uav_02"}),
+        sweep_cost_m=10.0,
+    )
+
+
+def _cluster(
+    cluster_id: str,
+    start: Position,
+    end: Position,
+    *,
+    allowed: set[str] | None = None,
+    sweep_cost_m: float = 10.0,
+) -> SweepCluster:
+    segment = _segment(f"s{cluster_id.strip('c')}", start, end, allowed)
+    return SweepCluster(
+        id=cluster_id,
+        component_id="component_1",
+        segment_ids=[segment.id],
+        segments=[segment],
+        coverage_cells={start, end},
+        priority_cells=set(),
+        centroid=start,
+        entry_candidates=[start, end],
+        exit_candidates=[end, start],
+        sweep_cost_m=sweep_cost_m,
+        estimated_internal_connector_cost_m=0.0,
+        allowed_uav_ids=set(allowed or {"uav_01", "uav_02"}),
     )
 
 
@@ -217,6 +260,65 @@ def test_bundle_exchange_reduces_max_cost_without_losing_segments() -> None:
     assert sorted(segment.id for bundle in improved.values() for segment in bundle) == [segment.id for segment in segments]
 
 
+def test_adaptive_cluster_assignment_includes_connector_cost_and_actual_exit() -> None:
+    grid_map = GridMap(width_m=300, height_m=30, resolution_m=10)
+    planner = AdaptiveComponentSweepPlanner({"algorithm": {"adaptive_component_sweep": {"cluster_exchange_iterations": 0}}})
+    uavs = [_uav("uav_01", Position(0, 0))]
+    clusters = [
+        _cluster("c1", Position(20, 0), Position(21, 0), allowed={"uav_01"}, sweep_cost_m=10.0),
+        _cluster("c2", Position(22, 0), Position(23, 0), allowed={"uav_01"}, sweep_cost_m=10.0),
+    ]
+
+    bundles = planner.assign_clusters_to_uavs(clusters, uavs, grid_map)
+
+    assert [cluster.id for cluster in bundles["uav_01"]] == ["c1", "c2"]
+    total_cost = planner.last_diagnostics["cluster_assignment_total_cost_per_uav"]["uav_01"]
+    connector_cost = planner.last_diagnostics["cluster_assignment_connector_cost_per_uav"]["uav_01"]
+    assert connector_cost >= 210.0
+    assert total_cost >= connector_cost + 20.0
+    assert planner.last_diagnostics["max_cluster_bundle_cost"] == total_cost
+
+
+def test_adaptive_cluster_exchange_reduces_max_cost_and_keeps_clusters_unique() -> None:
+    grid_map = GridMap(width_m=160, height_m=30, resolution_m=10)
+    planner = AdaptiveComponentSweepPlanner(
+        {"algorithm": {"adaptive_component_sweep": {"cluster_exchange_iterations": 20, "cluster_exchange_max_total_cost_increase_ratio": 0.5}}}
+    )
+    uavs = [_uav("uav_01", Position(0, 0)), _uav("uav_02", Position(15, 0))]
+    clusters = [
+        _cluster("c1", Position(1, 0), Position(2, 0), sweep_cost_m=20.0),
+        _cluster("c2", Position(2, 0), Position(3, 0), sweep_cost_m=20.0),
+        _cluster("c3", Position(13, 0), Position(14, 0), sweep_cost_m=20.0),
+        _cluster("c4", Position(14, 0), Position(15, 0), sweep_cost_m=20.0),
+        _cluster("c5", Position(15, 0), Position(15, 1), sweep_cost_m=20.0),
+    ]
+    bundles = {"uav_01": clusters, "uav_02": []}
+    before = planner._cluster_bundle_costs(bundles, uavs, grid_map)
+
+    improved = planner.improve_cluster_bundles(bundles, uavs, grid_map)
+    after = planner._cluster_bundle_costs(improved, uavs, grid_map)
+
+    assert max(after.values()) < max(before.values())
+    assert sorted(cluster.id for bundle in improved.values() for cluster in bundle) == sorted(cluster.id for cluster in clusters)
+    assert planner.last_diagnostics["cluster_exchange_accepted"] > 0
+
+
+def test_adaptive_cluster_exchange_respects_allowed_uav_ids() -> None:
+    grid_map = GridMap(width_m=120, height_m=30, resolution_m=10)
+    planner = AdaptiveComponentSweepPlanner(
+        {"algorithm": {"adaptive_component_sweep": {"cluster_exchange_iterations": 20, "cluster_exchange_max_total_cost_increase_ratio": 1.0}}}
+    )
+    uavs = [_uav("uav_01", Position(0, 0)), _uav("uav_02", Position(11, 0))]
+    locked = _cluster("c1", Position(1, 0), Position(2, 0), allowed={"uav_01"}, sweep_cost_m=50.0)
+    movable = _cluster("c2", Position(10, 0), Position(11, 0), allowed={"uav_01", "uav_02"}, sweep_cost_m=10.0)
+    bundles = {"uav_01": [locked, movable], "uav_02": []}
+
+    improved = planner.improve_cluster_bundles(bundles, uavs, grid_map)
+
+    assert "c1" in [cluster.id for cluster in improved["uav_01"]]
+    assert sorted(cluster.id for bundle in improved.values() for cluster in bundle) == ["c1", "c2"]
+
+
 def test_component_complexity_analyzer_classifies_simple_and_fragmented_components() -> None:
     grid_map = GridMap(width_m=100, height_m=60, resolution_m=10)
     uavs = [_uav("uav_01", Position(0, 0))]
@@ -238,6 +340,23 @@ def test_component_complexity_analyzer_classifies_simple_and_fragmented_componen
     assert complex_result.kind == "complex"
     assert complex_result.fragmented_line_count >= 4
     assert complex_result.avg_segments_per_scanline > 1.0
+
+
+def test_component_complexity_reachable_count_uses_reachability_index() -> None:
+    grid_map = GridMap(width_m=80, height_m=40, resolution_m=10)
+    for y in range(4):
+        grid_map.set_cell(Position(3, y), {"cell_type": CellType.OBSTACLE})
+    uavs = [_uav("uav_01", Position(0, 0)), _uav("uav_02", Position(7, 0))]
+    reachability = build_reachability_index(grid_map, uavs)
+    analyzer = ComponentComplexityAnalyzer({})
+
+    left_component = {Position(x, y) for x in range(3) for y in range(4)}
+    right_component = {Position(x, y) for x in range(4, 8) for y in range(4)}
+    left = analyzer.analyze(left_component, "left", grid_map, uavs, reachability=reachability)
+    right = analyzer.analyze(right_component, "right", grid_map, uavs, reachability=reachability)
+
+    assert left.reachable_uav_count == 1
+    assert right.reachable_uav_count == 1
 
 
 def test_simulate_planned_coverage_uses_waypoint_sensor_footprint() -> None:
@@ -285,3 +404,45 @@ def test_adaptive_planner_clusters_complex_segments_and_records_metadata() -> No
     assert all(0.0 < task.metadata["planned_coverage_ratio"] <= 1.0 for task in tasks)
     assert planner.last_diagnostics["complex_component_count"] >= 1
     assert planner.last_diagnostics["cluster_count_total"] >= 1
+
+
+def test_adaptive_5uav_simple_frontload_is_gated_to_large_five_uav_components() -> None:
+    grid_map = GridMap(width_m=500, height_m=300, resolution_m=10)
+    config = {
+        "algorithm": {
+            "adaptive_component_sweep": {
+                "enable_5uav_simple_frontload": True,
+                "frontload_min_uav_count": 5,
+                "frontload_min_component_cells": 100,
+            }
+        }
+    }
+
+    five_uavs = [_uav(f"uav_{idx:02d}", Position(0, idx)) for idx in range(1, 6)]
+    five_planner = AdaptiveComponentSweepPlanner(config)
+    five_tasks = five_planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=five_uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, five_uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert five_tasks
+    assert five_planner.last_diagnostics["simple_frontload_enabled"] is True
+    assert len(five_planner.last_diagnostics["frontload_uav_ids"]) == 5
+    assert all(task.metadata["simple_frontload_enabled"] is True for task in five_tasks)
+
+    four_uavs = [_uav(f"uav_{idx:02d}", Position(0, idx)) for idx in range(1, 5)]
+    four_planner = AdaptiveComponentSweepPlanner(config)
+    four_planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=four_uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, four_uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert four_planner.last_diagnostics["simple_frontload_enabled"] is False

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uav_search.core.data_types import Position, UAVState, UAVStatus
+from uav_search.core.data_types import CellType, Position, UAVState, UAVStatus
 from uav_search.evaluation.diagnostics import compute_diagnostics
 from uav_search.maps.grid_map import GridMap
 from uav_search.uav.fleet_manager import FleetManager
@@ -199,3 +199,44 @@ def test_segment_diagnostics_deduplicate_replanned_segment_ids() -> None:
 
     assert diagnostics["segment_quality"]["segment_count_total"] == 2
     assert diagnostics["segment_quality"]["unique_segment_count"] == 2
+
+
+def test_adaptive_fleet_planned_coverage_aggregates_multiple_uav_tasks_and_priority_cells() -> None:
+    grid_map = GridMap(width_m=60, height_m=30, resolution_m=10)
+    grid_map.set_cell(Position(5, 1), {"cell_type": CellType.PRIORITY, "search_priority": 3.0})
+    snapshots = [
+        {
+            "time_s": 1.0,
+            "commands": [
+                {
+                    "command": "FOLLOW_PATH",
+                    "uav_id": "uav_01",
+                    "metadata": {
+                        "planner_version": "adaptive_component_sweep_v1",
+                        "task_id": "task_a",
+                        "sensor_radius_cells": 0,
+                        "coverage_waypoints": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 2, "y": 0}],
+                        "planned_coverage_ratio": 0.5,
+                    },
+                },
+                {
+                    "command": "FOLLOW_PATH",
+                    "uav_id": "uav_02",
+                    "metadata": {
+                        "planner_version": "adaptive_component_sweep_v1",
+                        "task_id": "task_b",
+                        "sensor_radius_cells": 0,
+                        "coverage_waypoints": [{"x": 3, "y": 1}, {"x": 4, "y": 1}, {"x": 5, "y": 1}],
+                        "planned_coverage_ratio": 0.5,
+                    },
+                },
+            ],
+        }
+    ]
+
+    diagnostics = compute_diagnostics(grid_map, _fleet(), snapshots)
+    segment_quality = diagnostics["segment_quality"]
+
+    assert segment_quality["fleet_planned_coverage_ratio"] == 6 / 18
+    assert segment_quality["fleet_planned_priority_coverage_ratio"] == 1.0
+    assert segment_quality["fleet_planned_vs_actual_coverage_error"] == -6 / 18

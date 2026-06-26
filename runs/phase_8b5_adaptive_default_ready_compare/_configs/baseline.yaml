@@ -1,0 +1,98 @@
+map:
+  width_m: 1000
+  height_m: 1000
+  resolution_m: 10
+algorithm:
+  version: baseline_sparse_boustrophedon
+  segment_sweep:
+    coverage_margin: 0.015
+    max_initial_coverage_target: 0.97
+    min_segment_gain_cells: 2
+    min_segment_gain_per_meter: 0.01
+    min_segment_length_m: 15.0
+    drop_short_low_gain_segments: true
+    bundle_exchange_iterations: 20
+    bundle_exchange_max_total_cost_increase_ratio: 0.5
+    bundle_exchange_candidate_limit: 6
+  adaptive_component_sweep:
+    simple_fill_ratio: 0.65
+    simple_max_avg_segments_per_scanline: 2.2
+    simple_max_fragmented_line_ratio: 0.55
+    simple_max_complexity_score: 1.75
+    tiny_component_max_cells: 8
+    cluster_min_segments: 2
+    cluster_max_segments: 6
+    cluster_exchange_iterations: 40
+    cluster_exchange_max_total_cost_increase_ratio: 0.05
+    enable_5uav_simple_frontload: true
+    frontload_min_uav_count: 5
+    frontload_coverage_target: 0.7
+    frontload_min_component_cells: 200
+uav:
+  count: 1
+  max_speed_mps: 10.0
+  sensor_radius_cells: 2
+  endurance_s: 1800
+  battery_threshold: 0.2
+  home_position:
+  - 0
+  - 0
+search:
+  decay_lambda: 0.01
+  decay_threshold: 0.3
+  coverage_complete_threshold: 0.95
+  mission_complete_coverage_threshold: 0.95
+  priority_complete_threshold: 0.98
+  confirm_duration_steps: 5
+  confirm_orbit_radius_cells: 2
+  confirm_orbit_laps: 1
+  supplemental_task_max_cells: 80
+  min_supplemental_cells: 8
+  min_supplemental_score: 0.15
+  large_supplemental_region_cells: 40
+  post_goal_ordinary_min_cells: 40
+  supplemental_cluster_max_cells: 80
+  supplemental_cluster_radius_cells: 0
+  late_stage_coverage_threshold: 0.93
+  late_stage_min_supplemental_cells: 8
+  late_stage_min_gain_per_meter: 0.02
+  max_supplemental_tasks_per_run: 24
+  blocked_region_cache_ttl_s: 60.0
+  allow_early_return: true
+  priority_cell_weight: 3.0
+  distance_cost_weight: 1.0
+  uncovered_value_weight: 1.0
+  priority_value_weight: 2.0
+  redundant_penalty_weight: 0.5
+  redundant_revisit_interval_s: 30.0
+auction:
+  w_distance: 1.0
+  w_battery: 0.3
+  w_priority: 0.5
+  w_balance: 0.2
+  use_astar_for_bid: true
+planning:
+  obstacle_proximity_penalty: 0.5
+  priority_area_bonus: -0.2
+  safety_distance_cells: 2
+  conflict_time_horizon_steps: 60
+  max_astar_time_ms: 100
+scheduler:
+  cycle_interval_s: 1.0
+  event_debounce_s: 0.2
+  max_decision_latency_ms: 1000
+simulation:
+  time_step_s: 1.0
+  max_steps: 120
+  mission_grace_steps: 1000
+  return_home_grace_steps: 120
+  random_seed: 42
+visualization:
+  fps: 10
+  show_paths: true
+  show_coverage: true
+  show_grid: false
+logging:
+  output_dir: runs
+  snapshot_interval_steps: 1
+  save_json: true

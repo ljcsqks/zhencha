@@ -100,6 +100,9 @@ class ComponentComplexityAnalyzer:
         component_id: str,
         grid_map: GridMap,
         uav_states: list[UAVState],
+        *,
+        reachability: ReachabilityIndex | None = None,
+        reachable_uav_ids: set[str] | None = None,
     ) -> ComponentComplexity:
         if not component:
             return ComponentComplexity(component_id, "tiny", 0, 0, 0.0, 0.0, 0, 0.0, 0, 1.0, 0, math.inf, 0, 0.0)
@@ -127,11 +130,16 @@ class ComponentComplexityAnalyzer:
         )
         obstacle_hole_ratio = holes / bbox_area
         aspect = max(width, height) / max(1, min(width, height))
-        reachable_uavs = {
-            state.id
-            for state in uav_states
-            if any(_manhattan(state.position, cell) < math.inf for cell in component)
-        }
+        if reachable_uav_ids is not None:
+            reachable_uavs = set(reachable_uav_ids)
+        elif reachability is not None:
+            reachable_uavs = {
+                uav_id
+                for cell in component
+                for uav_id in reachability.reachable_uavs(cell)
+            }
+        else:
+            reachable_uavs = {state.id for state in uav_states if state.status != UAVStatus.OFFLINE}
         nearest = min(
             (_manhattan(state.position, cell) * grid_map.resolution_m for state in uav_states for cell in component),
             default=math.inf,
@@ -894,7 +902,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
         reachable_cells = {cell for cell in searchable_cells if grid_map.is_passable(cell) and reachability.any_reachable(cell)}
         components = reachability_components(grid_map, reachable_cells)
         analyses = [
-            self.analyzer.analyze(component, f"component_{idx}", grid_map, online)
+            self.analyzer.analyze(component, f"component_{idx}", grid_map, online, reachability=reachability)
             for idx, component in enumerate(components, start=1)
         ]
         component_by_id = {analysis.component_id: component for analysis, component in zip(analyses, components)}
@@ -914,6 +922,12 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 reachability=reachability,
                 searchable_cells=simple_cells,
             )
+            frontload_metadata = self._apply_5uav_simple_frontload(
+                simple_tasks,
+                simple_cells=simple_cells,
+                online=online,
+                grid_map=grid_map,
+            )
             for task in simple_tasks:
                 self._mark_adaptive_task(
                     task,
@@ -922,6 +936,8 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                     complex_count=sum(1 for analysis in analyses if analysis.kind == "complex"),
                     target_cells=reachable_cells,
                     sensor_radius_cells=sensor_radius_cells,
+                    grid_map=grid_map,
+                    extra_metadata=frontload_metadata,
                 )
             tasks.extend(simple_tasks)
 
@@ -954,6 +970,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                     complex_count=sum(1 for analysis in analyses if analysis.kind == "complex"),
                     target_cells=reachable_cells,
                     sensor_radius_cells=sensor_radius_cells,
+                    grid_map=grid_map,
                     clusters=ordered_clusters,
                 )
                 tasks.append(task)
@@ -998,8 +1015,52 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 complex_count=1,
                 target_cells=region,
                 sensor_radius_cells=sensor_radius_cells,
+                grid_map=grid_map,
             )
         return task
+
+    def _apply_5uav_simple_frontload(
+        self,
+        tasks: list[Task],
+        *,
+        simple_cells: set[Position],
+        online: list[UAVState],
+        grid_map: GridMap,
+    ) -> dict[str, object]:
+        config = self._adaptive_config()
+        enabled = bool(config.get("enable_5uav_simple_frontload", False))
+        min_uavs = int(config.get("frontload_min_uav_count", 5))
+        min_cells = int(config.get("frontload_min_component_cells", 0))
+        coverage_target = float(config.get("frontload_coverage_target", 0.70))
+        priority_cells = {cell for cell in simple_cells if grid_map.get_cell(cell).search_priority > 1.0}
+        active = enabled and len(online) >= min_uavs and len(simple_cells) >= min_cells
+        metadata: dict[str, object] = {
+            "simple_frontload_enabled": active,
+            "frontload_component_count": 1 if active and simple_cells else 0,
+            "frontload_target_cells": len(simple_cells) if active else 0,
+            "frontload_coverage_target": coverage_target if active else 0.0,
+            "frontload_priority_cells": len(priority_cells) if active else 0,
+            "frontload_uav_ids": [state.id for state in online[:min_uavs]] if active else [],
+        }
+        self.last_diagnostics.update(metadata)
+        if not active or not tasks:
+            return metadata
+
+        centroid = Position(
+            round(sum(cell.x for cell in simple_cells) / len(simple_cells)),
+            round(sum(cell.y for cell in simple_cells) / len(simple_cells)),
+        )
+        for task in tasks:
+            if not task.coverage_waypoints:
+                continue
+            start_distance = _manhattan(task.coverage_waypoints[0], centroid)
+            end_distance = _manhattan(task.coverage_waypoints[-1], centroid)
+            if end_distance < start_distance:
+                task.coverage_waypoints = list(reversed(task.coverage_waypoints))
+                task.waypoints = list(reversed(task.waypoints))
+                task.entry_point = task.coverage_waypoints[0]
+                task.metadata["frontload_reversed"] = True
+        return metadata
 
     def cluster_segments(self, segments: list[SweepSegment], grid_map: GridMap) -> list[SweepCluster]:
         config = self.config.get("algorithm", {}).get("adaptive_component_sweep", {})
@@ -1051,36 +1112,137 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
             ),
         )
         for cluster in ordered_clusters:
-            candidates: list[tuple[float, str]] = []
+            candidates: list[tuple[float, float, str, Position]] = []
             for uav_id in sorted(cluster.allowed_uav_ids):
                 if uav_id not in bundles:
                     continue
-                connector = min(cache.cost(route_ends[uav_id], entry, grid_map) for entry in cluster.entry_candidates)
+                connector, _, exit_point = self._best_cluster_connection(route_ends[uav_id], cluster, grid_map, cache)
                 if math.isinf(connector):
                     continue
                 projected = route_costs[uav_id] + connector + cluster.sweep_cost_m + cluster.estimated_internal_connector_cost_m
-                projected_max = max(projected, *(value for key, value in route_costs.items() if key != uav_id))
-                candidates.append((projected_max, uav_id))
+                other_costs = [value for key, value in route_costs.items() if key != uav_id]
+                projected_max = max([projected, *other_costs])
+                candidates.append((projected_max, projected, uav_id, exit_point))
             if not candidates:
                 continue
-            _, winner = min(candidates, key=lambda item: (item[0], item[1]))
+            _, projected_cost, winner, exit_point = min(candidates, key=lambda item: (item[0], item[1], item[2]))
             bundles[winner].append(cluster)
-            route_ends[winner] = cluster.exit_candidates[-1]
-            route_costs[winner] += cluster.sweep_cost_m + cluster.estimated_internal_connector_cost_m
+            route_ends[winner] = exit_point
+            route_costs[winner] = projected_cost
+        before_costs = self._cluster_bundle_costs(bundles, uav_states, grid_map)
+        bundles = self.improve_cluster_bundles(bundles, uav_states, grid_map)
         costs = self._cluster_bundle_costs(bundles, uav_states, grid_map)
+        connector_costs = self._cluster_bundle_connector_costs(bundles, uav_states, grid_map)
+        exchange = dict(self.last_diagnostics)
         self.last_diagnostics.update(
             {
                 "cluster_count_per_uav": {uav_id: len(bundle) for uav_id, bundle in bundles.items()},
                 "cluster_bundle_cost_per_uav": costs,
+                "cluster_assignment_connector_cost_per_uav": connector_costs,
+                "cluster_assignment_total_cost_per_uav": costs,
                 "max_cluster_bundle_cost": max(costs.values(), default=0.0),
                 "cluster_workload_balance": _workload_balance(list(costs.values())),
-                "cluster_exchange_attempts": 0,
-                "cluster_exchange_accepted": 0,
-                "max_cluster_cost_before_exchange": max(costs.values(), default=0.0),
+                "max_cluster_cost_before_exchange": exchange.get(
+                    "max_cluster_cost_before_exchange", max(before_costs.values(), default=0.0)
+                ),
                 "max_cluster_cost_after_exchange": max(costs.values(), default=0.0),
             }
         )
         return bundles
+
+    def improve_cluster_bundles(
+        self,
+        bundles: dict[str, list[SweepCluster]],
+        uav_states: list[UAVState],
+        grid_map: GridMap,
+    ) -> dict[str, list[SweepCluster]]:
+        config = self._adaptive_config()
+        max_iterations = int(config.get("cluster_exchange_iterations", 0))
+        max_total_increase_ratio = float(config.get("cluster_exchange_max_total_cost_increase_ratio", 0.05))
+        if max_iterations <= 0:
+            copied = {uav_id: list(bundle) for uav_id, bundle in bundles.items()}
+            costs = self._cluster_bundle_costs(copied, uav_states, grid_map)
+            self.last_diagnostics.update(
+                {
+                    "cluster_exchange_attempts": 0,
+                    "cluster_exchange_accepted": 0,
+                    "max_cluster_cost_before_exchange": max(costs.values(), default=0.0),
+                    "max_cluster_cost_after_exchange": max(costs.values(), default=0.0),
+                    "total_cluster_cost_before_exchange": sum(costs.values()),
+                    "total_cluster_cost_after_exchange": sum(costs.values()),
+                }
+            )
+            return copied
+
+        improved = {uav_id: list(bundle) for uav_id, bundle in bundles.items()}
+        before = self._cluster_bundle_costs(improved, uav_states, grid_map)
+        attempts = 0
+        accepted = 0
+
+        for _ in range(max_iterations):
+            costs = self._cluster_bundle_costs(improved, uav_states, grid_map)
+            if not costs:
+                break
+            max_uav = max(costs, key=costs.get)
+            current_max = max(costs.values(), default=0.0)
+            current_total = sum(costs.values())
+            best: tuple[float, float, dict[str, list[SweepCluster]]] | None = None
+
+            for idx, cluster in sorted(
+                enumerate(improved.get(max_uav, [])),
+                key=lambda item: (-item[1].sweep_cost_m, -len(item[1].coverage_cells), item[1].id),
+            ):
+                for target_uav in sorted(improved):
+                    if target_uav == max_uav or target_uav not in cluster.allowed_uav_ids:
+                        continue
+                    attempts += 1
+                    candidate = {uav_id: list(bundle) for uav_id, bundle in improved.items()}
+                    candidate[max_uav].pop(idx)
+                    candidate[target_uav].append(cluster)
+                    candidate = self._order_cluster_bundles(candidate, uav_states, grid_map)
+                    candidate_costs = self._cluster_bundle_costs(candidate, uav_states, grid_map)
+                    candidate_max = max(candidate_costs.values(), default=0.0)
+                    candidate_total = sum(candidate_costs.values())
+                    if candidate_max < current_max and candidate_total <= current_total * (1.0 + max_total_increase_ratio):
+                        if best is None or (candidate_max, candidate_total) < (best[0], best[1]):
+                            best = (candidate_max, candidate_total, candidate)
+
+            for source_uav in sorted(improved):
+                if source_uav == max_uav:
+                    continue
+                for left_idx, left in enumerate(list(improved.get(max_uav, []))):
+                    for right_idx, right in enumerate(list(improved.get(source_uav, []))):
+                        if source_uav not in left.allowed_uav_ids or max_uav not in right.allowed_uav_ids:
+                            continue
+                        attempts += 1
+                        candidate = {uav_id: list(bundle) for uav_id, bundle in improved.items()}
+                        candidate[max_uav][left_idx] = right
+                        candidate[source_uav][right_idx] = left
+                        candidate = self._order_cluster_bundles(candidate, uav_states, grid_map)
+                        candidate_costs = self._cluster_bundle_costs(candidate, uav_states, grid_map)
+                        candidate_max = max(candidate_costs.values(), default=0.0)
+                        candidate_total = sum(candidate_costs.values())
+                        if candidate_max < current_max and candidate_total <= current_total * (1.0 + max_total_increase_ratio):
+                            if best is None or (candidate_max, candidate_total) < (best[0], best[1]):
+                                best = (candidate_max, candidate_total, candidate)
+
+            if best is None:
+                break
+            improved = best[2]
+            accepted += 1
+
+        after = self._cluster_bundle_costs(improved, uav_states, grid_map)
+        self.last_diagnostics.update(
+            {
+                "cluster_exchange_attempts": attempts,
+                "cluster_exchange_accepted": accepted,
+                "max_cluster_cost_before_exchange": max(before.values(), default=0.0),
+                "max_cluster_cost_after_exchange": max(after.values(), default=0.0),
+                "total_cluster_cost_before_exchange": sum(before.values()),
+                "total_cluster_cost_after_exchange": sum(after.values()),
+            }
+        )
+        return improved
 
     def order_clusters_for_uav(
         self,
@@ -1097,15 +1259,45 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 enumerate(remaining),
                 key=lambda item: (
                     item[1].component_id != ordered[-1].component_id if ordered else False,
-                    min(cache.cost(current, entry, grid_map) for entry in item[1].entry_candidates),
+                    self._best_cluster_connection(current, item[1], grid_map, cache)[0],
                     item[1].id,
                 ),
             )
             ordered.append(cluster)
-            current = cluster.exit_candidates[-1]
+            _, _, current = self._best_cluster_connection(current, cluster, grid_map, cache)
             remaining.pop(idx)
         self._record_component_jump_diagnostics(ordered, grid_map)
         return ordered
+
+    def _adaptive_config(self) -> dict:
+        return dict(self.config.get("algorithm", {}).get("adaptive_component_sweep", {}))
+
+    def _best_cluster_connection(
+        self,
+        current: Position,
+        cluster: SweepCluster,
+        grid_map: GridMap,
+        cache: SegmentConnectorCostCache | None = None,
+    ) -> tuple[float, Position, Position]:
+        cache = cache or SegmentConnectorCostCache(planner_run_id=f"cluster_connect_{id(self)}")
+        choices: list[tuple[float, int, Position, Position]] = []
+        for index, entry in enumerate(cluster.entry_candidates):
+            exit_point = cluster.exit_candidates[index] if index < len(cluster.exit_candidates) else cluster.exit_candidates[-1]
+            choices.append((cache.cost(current, entry, grid_map), index, entry, exit_point))
+        cost, _, entry, exit_point = min(choices, key=lambda item: (item[0], item[1]))
+        return cost, entry, exit_point
+
+    def _order_cluster_bundles(
+        self,
+        bundles: dict[str, list[SweepCluster]],
+        uav_states: list[UAVState],
+        grid_map: GridMap,
+    ) -> dict[str, list[SweepCluster]]:
+        states = {state.id: state for state in uav_states}
+        return {
+            uav_id: self.order_clusters_for_uav(bundle, states[uav_id].position, grid_map) if uav_id in states else list(bundle)
+            for uav_id, bundle in bundles.items()
+        }
 
     def _cluster_from_segments(
         self,
@@ -1145,14 +1337,43 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
     ) -> dict[str, float]:
         states = {state.id: state for state in uav_states}
         costs: dict[str, float] = {}
+        cache = SegmentConnectorCostCache(planner_run_id=f"cluster_cost_{id(self)}_{sum(len(bundle) for bundle in bundles.values())}")
         for uav_id, bundle in bundles.items():
             current = states[uav_id].position if uav_id in states else Position(0, 0)
             cost = 0.0
             for cluster in bundle:
-                cost += min(_manhattan(current, entry) * grid_map.resolution_m for entry in cluster.entry_candidates)
+                connector, _, exit_point = self._best_cluster_connection(current, cluster, grid_map, cache)
+                if math.isinf(connector):
+                    connector = _manhattan(current, cluster.entry_candidates[0]) * grid_map.resolution_m
+                    exit_point = cluster.exit_candidates[0]
+                cost += connector
                 cost += cluster.sweep_cost_m + cluster.estimated_internal_connector_cost_m
-                current = cluster.exit_candidates[-1]
+                current = exit_point
             costs[uav_id] = cost
+        return costs
+
+    def _cluster_bundle_connector_costs(
+        self,
+        bundles: dict[str, list[SweepCluster]],
+        uav_states: list[UAVState],
+        grid_map: GridMap,
+    ) -> dict[str, float]:
+        states = {state.id: state for state in uav_states}
+        costs: dict[str, float] = {}
+        cache = SegmentConnectorCostCache(
+            planner_run_id=f"cluster_connector_cost_{id(self)}_{sum(len(bundle) for bundle in bundles.values())}"
+        )
+        for uav_id, bundle in bundles.items():
+            current = states[uav_id].position if uav_id in states else Position(0, 0)
+            connector_total = 0.0
+            for cluster in bundle:
+                connector, _, exit_point = self._best_cluster_connection(current, cluster, grid_map, cache)
+                if math.isinf(connector):
+                    connector = _manhattan(current, cluster.entry_candidates[0]) * grid_map.resolution_m
+                    exit_point = cluster.exit_candidates[0]
+                connector_total += connector
+                current = exit_point
+            costs[uav_id] = connector_total
         return costs
 
     def _record_component_jump_diagnostics(self, clusters: list[SweepCluster], grid_map: GridMap) -> None:
@@ -1185,10 +1406,12 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
         complex_count: int,
         target_cells: set[Position],
         sensor_radius_cells: int,
+        grid_map: GridMap,
         clusters: list[SweepCluster] | None = None,
+        extra_metadata: dict[str, object] | None = None,
     ) -> None:
         planned = simulate_planned_coverage(task.coverage_waypoints, sensor_radius_cells, target_cells)
-        priority_cells = {cell for cell in target_cells if task.metadata.get("priority") or False}
+        priority_cells = {cell for cell in target_cells if grid_map.get_cell(cell).search_priority > 1.0}
         task.metadata.update(
             {
                 "planner_version": self.version,
@@ -1197,12 +1420,15 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 "complex_component_count": complex_count,
                 "cluster_ids": [cluster.id for cluster in clusters or []],
                 "segment_ids": list(dict.fromkeys(task.metadata.get("segment_ids", []))),
+                "sensor_radius_cells": sensor_radius_cells,
+                "coverage_waypoints": _positions_to_dicts(task.coverage_waypoints),
                 "planned_coverage_ratio": len(planned) / len(target_cells) if target_cells else 1.0,
                 "planned_priority_coverage_ratio": (
                     len(planned & priority_cells) / len(priority_cells) if priority_cells else 1.0
                 ),
             }
         )
+        task.metadata.update(extra_metadata or {})
         for key, value in self.last_diagnostics.items():
             if key.startswith("cluster_") or key in {
                 "intra_component_connector_cost",
@@ -1211,6 +1437,12 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 "max_inter_component_jump_m",
                 "avg_inter_component_jump_m",
                 "component_count_total",
+                "simple_frontload_enabled",
+                "frontload_component_count",
+                "frontload_target_cells",
+                "frontload_coverage_target",
+                "frontload_priority_cells",
+                "frontload_uav_ids",
             }:
                 task.metadata[key] = value
 

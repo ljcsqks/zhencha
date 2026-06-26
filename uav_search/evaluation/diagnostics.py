@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from uav_search.core.data_types import Position
 from uav_search.maps.grid_map import GridMap
 from uav_search.planning.reachability import build_reachability_index
 from uav_search.planning.reachability import connected_components as reachability_components
@@ -51,10 +52,17 @@ def compute_diagnostics(
     coverage_quality.update(reachability_quality)
     allocation_quality = _allocation_quality(per_uav, snapshots)
     segment_quality = _segment_quality(snapshots)
-    planned_ratio = float(segment_quality.get("planned_coverage_ratio", 0.0) or 0.0)
+    fleet_planned = _fleet_planned_coverage_quality(grid_map, snapshots)
+    segment_quality.update(fleet_planned)
+    planned_ratio = float(segment_quality.get("fleet_planned_coverage_ratio", 0.0) or segment_quality.get("planned_coverage_ratio", 0.0) or 0.0)
     actual_ratio = grid_map.coverage_rate()
     segment_quality["actual_final_coverage_ratio"] = actual_ratio
     segment_quality["planned_vs_actual_coverage_error"] = actual_ratio - planned_ratio if planned_ratio > 0 else 0.0
+    segment_quality["fleet_planned_vs_actual_coverage_error"] = (
+        actual_ratio - float(segment_quality.get("fleet_planned_coverage_ratio", 0.0))
+        if float(segment_quality.get("fleet_planned_coverage_ratio", 0.0)) > 0
+        else 0.0
+    )
     command_quality = _command_quality(snapshots)
     scheduler_quality = _scheduler_quality(snapshots)
     return {
@@ -279,6 +287,10 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
         "cluster_exchange_accepted": 0,
         "max_cluster_cost_before_exchange": 0.0,
         "max_cluster_cost_after_exchange": 0.0,
+        "total_cluster_cost_before_exchange": 0.0,
+        "total_cluster_cost_after_exchange": 0.0,
+        "cluster_assignment_connector_cost_per_uav": {},
+        "cluster_assignment_total_cost_per_uav": {},
         "intra_component_connector_cost": 0.0,
         "inter_component_connector_cost": 0.0,
         "inter_component_jump_count": 0,
@@ -289,6 +301,12 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
         "simple_component_count": 0,
         "complex_component_count": 0,
         "component_count_total": 0,
+        "simple_frontload_enabled": False,
+        "frontload_component_count": 0,
+        "frontload_target_cells": 0,
+        "frontload_coverage_target": 0.0,
+        "frontload_priority_cells": 0,
+        "frontload_uav_ids": [],
     }
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for snapshot in snapshots:
@@ -308,7 +326,15 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
                 value = metadata.get(key)
                 if value is None:
                     continue
-                if isinstance(summary[key], int):
+                if isinstance(summary[key], bool):
+                    summary[key] = bool(summary[key]) or bool(value)
+                elif isinstance(summary[key], dict):
+                    if isinstance(value, dict):
+                        summary[key] = _merge_numeric_dicts(summary[key], value)
+                elif isinstance(summary[key], list):
+                    if isinstance(value, list) and len(value) > len(summary[key]):
+                        summary[key] = list(value)
+                elif isinstance(summary[key], int):
                     summary[key] = max(summary[key], int(float(value)))
                 else:
                     summary[key] = max(float(summary[key]), float(value))
@@ -317,6 +343,79 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
     if cluster_count_per_uav:
         summary["cluster_count_total"] = max(int(summary["cluster_count_total"]), sum(cluster_count_per_uav.values()))
     return summary
+
+
+def _merge_numeric_dicts(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(current)
+    for key, value in incoming.items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            merged[str(key)] = value
+            continue
+        merged[str(key)] = max(float(merged.get(str(key), 0.0) or 0.0), numeric)
+    return merged
+
+
+def _fleet_planned_coverage_quality(grid_map: GridMap, snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    target_cells = set(grid_map.get_searchable_cells())
+    priority_cells = {cell for cell in target_cells if grid_map.get_cell(cell).search_priority > 1.0}
+    planned: set[Position] = set()
+    seen_tasks: set[str] = set()
+    for snapshot in snapshots:
+        for command in snapshot.get("commands", []):
+            metadata = command.get("metadata") or {}
+            if metadata.get("planner_version") != "adaptive_component_sweep_v1":
+                continue
+            task_key = str(metadata.get("task_id") or command.get("task_id") or command.get("command_id") or "")
+            if task_key and task_key in seen_tasks:
+                continue
+            waypoints = _metadata_positions(metadata.get("coverage_waypoints") or metadata.get("logical_waypoints") or [])
+            if not waypoints:
+                continue
+            if task_key:
+                seen_tasks.add(task_key)
+            radius = int(metadata.get("sensor_radius_cells", 0) or 0)
+            planned.update(_simulate_planned_coverage(waypoints, radius, target_cells))
+    if not target_cells:
+        coverage_ratio = 1.0
+    else:
+        coverage_ratio = len(planned & target_cells) / len(target_cells)
+    if not priority_cells:
+        priority_ratio = 1.0
+    else:
+        priority_ratio = len(planned & priority_cells) / len(priority_cells)
+    return {
+        "fleet_planned_coverage_ratio": coverage_ratio,
+        "fleet_planned_priority_coverage_ratio": priority_ratio,
+        "fleet_planned_covered_cells": len(planned & target_cells),
+        "fleet_planned_priority_covered_cells": len(planned & priority_cells),
+    }
+
+
+def _metadata_positions(raw: Any) -> list[Position]:
+    positions: list[Position] = []
+    if not isinstance(raw, list):
+        return positions
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        positions.append(Position(int(item.get("x", 0)), int(item.get("y", 0))))
+    return positions
+
+
+def _simulate_planned_coverage(
+    waypoints: list[Position],
+    sensor_radius_cells: int,
+    target_cells: set[Position],
+) -> set[Position]:
+    radius_sq = sensor_radius_cells * sensor_radius_cells
+    return {
+        cell
+        for waypoint in waypoints
+        for cell in target_cells
+        if (cell.x - waypoint.x) ** 2 + (cell.y - waypoint.y) ** 2 <= radius_sq
+    }
 
 
 def _command_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
