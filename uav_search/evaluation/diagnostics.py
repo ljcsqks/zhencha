@@ -51,6 +51,10 @@ def compute_diagnostics(
     coverage_quality.update(reachability_quality)
     allocation_quality = _allocation_quality(per_uav, snapshots)
     segment_quality = _segment_quality(snapshots)
+    planned_ratio = float(segment_quality.get("planned_coverage_ratio", 0.0) or 0.0)
+    actual_ratio = grid_map.coverage_rate()
+    segment_quality["actual_final_coverage_ratio"] = actual_ratio
+    segment_quality["planned_vs_actual_coverage_error"] = actual_ratio - planned_ratio if planned_ratio > 0 else 0.0
     command_quality = _command_quality(snapshots)
     scheduler_quality = _scheduler_quality(snapshots)
     return {
@@ -205,7 +209,7 @@ def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
     for snapshot in snapshots:
         for command in snapshot.get("commands", []):
             metadata = command.get("metadata") or {}
-            if metadata.get("planner_version") != "segment_sweep_v1":
+            if metadata.get("planner_version") not in {"segment_sweep_v1", "adaptive_component_sweep_v1"}:
                 continue
             uav_id = str(command.get("uav_id", "unknown"))
             segment_ids = [str(item) for item in metadata.get("segment_ids", []) if item is not None]
@@ -258,7 +262,61 @@ def _segment_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "segment_orientation": _dominant_value(orientations),
         **planner_summary,
         **planner_summary_float,
+        **_cluster_quality_from_commands(snapshots),
     }
+
+
+def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    cluster_count_per_uav: dict[str, int] = {}
+    cluster_bundle_cost_per_uav: dict[str, float] = {}
+    summary: dict[str, Any] = {
+        "cluster_count_total": 0,
+        "avg_segments_per_cluster": 0.0,
+        "max_segments_per_cluster": 0,
+        "max_cluster_bundle_cost": 0.0,
+        "cluster_workload_balance": 1.0,
+        "cluster_exchange_attempts": 0,
+        "cluster_exchange_accepted": 0,
+        "max_cluster_cost_before_exchange": 0.0,
+        "max_cluster_cost_after_exchange": 0.0,
+        "intra_component_connector_cost": 0.0,
+        "inter_component_connector_cost": 0.0,
+        "inter_component_jump_count": 0,
+        "max_inter_component_jump_m": 0.0,
+        "avg_inter_component_jump_m": 0.0,
+        "planned_coverage_ratio": 0.0,
+        "planned_priority_coverage_ratio": 0.0,
+        "simple_component_count": 0,
+        "complex_component_count": 0,
+        "component_count_total": 0,
+    }
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for snapshot in snapshots:
+        for command in snapshot.get("commands", []):
+            metadata = command.get("metadata") or {}
+            if metadata.get("planner_version") != "adaptive_component_sweep_v1":
+                continue
+            uav_id = str(command.get("uav_id", "unknown"))
+            cluster_ids = tuple(str(item) for item in metadata.get("cluster_ids", []) if item is not None)
+            if cluster_ids and (uav_id, cluster_ids) not in seen:
+                seen.add((uav_id, cluster_ids))
+                cluster_count_per_uav[uav_id] = cluster_count_per_uav.get(uav_id, 0) + len(cluster_ids)
+                cluster_bundle_cost_per_uav[uav_id] = cluster_bundle_cost_per_uav.get(uav_id, 0.0) + float(
+                    metadata.get("estimated_connector_cost_m", 0.0) or 0.0
+                ) + float(metadata.get("estimated_sweep_cost_m", 0.0) or 0.0)
+            for key in summary:
+                value = metadata.get(key)
+                if value is None:
+                    continue
+                if isinstance(summary[key], int):
+                    summary[key] = max(summary[key], int(float(value)))
+                else:
+                    summary[key] = max(float(summary[key]), float(value))
+    summary["cluster_count_per_uav"] = cluster_count_per_uav
+    summary["cluster_bundle_cost_per_uav"] = cluster_bundle_cost_per_uav
+    if cluster_count_per_uav:
+        summary["cluster_count_total"] = max(int(summary["cluster_count_total"]), sum(cluster_count_per_uav.values()))
+    return summary
 
 
 def _command_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
