@@ -23,6 +23,30 @@ export function ControlPanel({ sim }: Props) {
           ))}
         </select>
       </label>
+      <label className="field">
+        <span>Algorithm</span>
+        <select
+          value={sim.selectedAlgorithmVersion || ""}
+          onChange={(event) => sim.setSelectedAlgorithmVersion(event.target.value)}
+          title={sim.algorithms.find((item) => item.version === sim.selectedAlgorithmVersion)?.description}
+        >
+          {sim.algorithms.map((algorithm) => (
+            <option key={algorithm.version} value={algorithm.version} title={algorithm.description}>
+              {algorithm.label}
+            </option>
+          ))}
+        </select>
+        <small className="field-note">
+          {sim.algorithms.find((item) => item.version === sim.selectedAlgorithmVersion)?.description || "Reset applies the selected algorithm."}
+        </small>
+      </label>
+      <div className="algorithm-status">
+        <span>Current algorithm</span>
+        <strong className="mono compact">{state?.algorithm_version || "-"}</strong>
+        {state?.running && sim.selectedAlgorithmVersion && sim.selectedAlgorithmVersion !== state.algorithm_version && (
+          <small>Reset required to apply</small>
+        )}
+      </div>
 
       <div className="button-grid">
         <button onClick={sim.reset}>

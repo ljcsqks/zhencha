@@ -8,6 +8,7 @@ interface Props {
 }
 
 const fields = [
+  "algorithm_version",
   "global_coverage",
   "priority_coverage",
   "total_distance_m",
@@ -23,6 +24,8 @@ const fields = [
 
 export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
   const metrics = { ...(state?.metrics || {}), ...(fullMetrics || {}) };
+  const algorithmVersion = String(state?.algorithm_version || metrics.algorithm_version || "-");
+  const adaptiveDiagnostics = nestedRecord(metrics, ["diagnostics", "segment_quality"]);
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -39,6 +42,14 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
           </div>
         ))}
       </dl>
+      {algorithmVersion === "adaptive_component_sweep_v1" && (
+        <div className="diagnostic-strip">
+          <strong>Adaptive diagnostics</strong>
+          <span>clusters {formatMetric(adaptiveDiagnostics.cluster_count_total)}</span>
+          <span>frontload {formatMetric(adaptiveDiagnostics.simple_frontload_enabled)}</span>
+          <span>planned {formatMetric(adaptiveDiagnostics.fleet_planned_coverage_ratio)}</span>
+        </div>
+      )}
     </section>
   );
 }
@@ -54,4 +65,15 @@ function formatMetric(value: unknown): string {
     return value ? "true" : "false";
   }
   return value == null ? "-" : String(value);
+}
+
+function nestedRecord(payload: Record<string, unknown>, path: string[]): Record<string, unknown> {
+  let current: unknown = payload;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return {};
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current && typeof current === "object" && !Array.isArray(current) ? (current as Record<string, unknown>) : {};
 }

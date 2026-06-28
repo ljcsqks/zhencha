@@ -190,6 +190,37 @@ h2 {
   gap: 5px;
 }
 
+.field-note,
+.panel-note {
+  color: #59685d;
+  line-height: 1.35;
+}
+
+.panel-note {
+  margin: 8px 0 0;
+}
+
+.algorithm-status,
+.diagnostic-strip {
+  margin-top: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid #d9e0d6;
+  border-radius: 7px;
+  background: #fbfcf8;
+}
+
+.algorithm-status span,
+.algorithm-status small,
+.diagnostic-strip span {
+  color: #59685d;
+}
+
+.compact-status {
+  margin-top: 10px;
+}
+
 .button-grid {
   margin-top: 12px;
   display: grid;

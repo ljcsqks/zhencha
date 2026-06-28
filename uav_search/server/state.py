@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from uav_search.server.algorithms import algorithms_payload
 from uav_search.evaluation.metrics import compute_metrics
 from uav_search.maps.grid_map import GridMap
 from uav_search.simulation.simulator import Simulator
@@ -27,12 +28,15 @@ def build_state(
 ) -> dict[str, Any]:
     latest = simulator.snapshots[-1] if simulator.snapshots else {}
     include_full_map = include_map and state_level == "full"
+    algorithm_version = str(config.get("algorithm", {}).get("version", "baseline_sparse_boustrophedon"))
     state = {
         "time_s": simulator.time_s,
         "tick": simulator._tick,
         "running": running,
         "run_id": run_id,
         "scenario_name": scenario_name,
+        "algorithm_version": algorithm_version,
+        "available_algorithm_versions": [item["version"] for item in algorithms_payload()["algorithms"]],
         "global_coverage": grid_map.coverage_rate(),
         "priority_coverage": grid_map.coverage_rate(priority_only=True),
         "uavs": latest.get("uavs", _uavs_from_fleet(fleet)),
@@ -65,7 +69,7 @@ def metrics_summary(
     state_level: str = "full",
 ) -> dict[str, Any]:
     if state_level != "full":
-        return lightweight_metrics_summary(
+        summary = lightweight_metrics_summary(
             simulator,
             grid_map,
             fleet,
@@ -73,12 +77,15 @@ def metrics_summary(
                 config.get("search", {}).get("mission_complete_coverage_threshold", 0.95)
             ),
         )
+        summary["algorithm_version"] = str(config.get("algorithm", {}).get("version", "baseline_sparse_boustrophedon"))
+        return summary
     if not simulator.snapshots:
         return {
             "global_coverage": grid_map.coverage_rate(),
             "priority_coverage": grid_map.coverage_rate(priority_only=True),
             "total_distance_m": sum(state.total_distance_m for state in fleet.get_all_states()),
             "no_fly_violations": 0,
+            "algorithm_version": str(config.get("algorithm", {}).get("version", "baseline_sparse_boustrophedon")),
         }
     metrics = compute_metrics(
         scenario_name,

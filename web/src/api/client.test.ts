@@ -6,7 +6,7 @@ describe("simulation API client", () => {
     vi.useRealTimers();
   });
 
-  it("posts reset requests through the configured backend base URL", async () => {
+  it("posts reset requests through the configured backend base URL with optional algorithm version", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ run_id: "run_1", map: {} }),
@@ -16,7 +16,7 @@ describe("simulation API client", () => {
       fetchImpl: fetchMock,
     });
 
-    await client.resetSimulation("config/default.yaml", "config/scenarios/area_search_1uav.yaml");
+    await client.resetSimulation("config/default.yaml", "config/scenarios/area_search_1uav.yaml", "adaptive_component_sweep_v1");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://backend.test/api/sim/reset",
@@ -25,9 +25,29 @@ describe("simulation API client", () => {
         body: JSON.stringify({
           config_path: "config/default.yaml",
           scenario_path: "config/scenarios/area_search_1uav.yaml",
+          algorithm_version: "adaptive_component_sweep_v1",
         }),
       }),
     );
+  });
+
+  it("fetches algorithm metadata", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        algorithms: [{ version: "baseline_sparse_boustrophedon", label: "Baseline", description: "Default" }],
+        default_version: "baseline_sparse_boustrophedon",
+      }),
+    });
+    const client = createSimulationClient({
+      baseUrl: "http://backend.test",
+      fetchImpl: fetchMock,
+    });
+
+    const result = await client.getAlgorithms();
+
+    expect(fetchMock).toHaveBeenCalledWith("http://backend.test/api/algorithms", expect.any(Object));
+    expect(result.default_version).toBe("baseline_sparse_boustrophedon");
   });
 
   it("opens websocket connections using the matching ws protocol", () => {

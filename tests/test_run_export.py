@@ -84,6 +84,29 @@ def test_export_run_writes_required_files_and_summary() -> None:
     assert summary["algorithm_version"] == "baseline_sparse_boustrophedon"
 
 
+def test_export_summary_uses_reset_algorithm_override() -> None:
+    client = TestClient(app)
+    client.post(
+        "/api/sim/reset",
+        json={
+            "config_path": "config/default.yaml",
+            "scenario_path": "config/scenarios/area_search_1uav.yaml",
+            "algorithm_version": "adaptive_component_sweep_v1",
+        },
+    )
+    client.post("/api/sim/step", json={"steps": 1})
+
+    response = client.post("/api/sim/export")
+
+    assert response.status_code == 200
+    summary_path = Path(response.json()["export_dir"]) / "summary.json"
+    snapshots_path = Path(response.json()["export_dir"]) / "snapshots.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    snapshots = json.loads(snapshots_path.read_text(encoding="utf-8"))
+    assert summary["algorithm_version"] == "adaptive_component_sweep_v1"
+    assert snapshots["algorithm_version"] == "adaptive_component_sweep_v1"
+
+
 def test_export_does_not_change_runtime_state() -> None:
     client = TestClient(app)
     client.post(

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 class ResetRequest(BaseModel):
     config_path: str = "config/default.yaml"
     scenario_path: str = "config/scenarios/area_search_1uav.yaml"
+    algorithm_version: str | None = None
 
 
 class StepRequest(BaseModel):

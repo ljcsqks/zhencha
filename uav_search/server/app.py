@@ -57,9 +57,14 @@ def scenarios() -> dict[str, Any]:
     return {"scenarios": runtime.get_scenarios()}
 
 
+@app.get("/api/algorithms")
+def algorithms() -> dict[str, Any]:
+    return runtime.get_algorithms()
+
+
 @app.post("/api/sim/reset")
 async def reset(request: ResetRequest) -> dict[str, Any]:
-    state = _call_runtime(runtime.reset, request.config_path, request.scenario_path)
+    state = _call_runtime(runtime.reset, request.config_path, request.scenario_path, request.algorithm_version)
     await ws_manager.broadcast(state)
     return state
 

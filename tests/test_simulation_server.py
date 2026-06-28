@@ -30,6 +30,22 @@ def test_scenarios_lists_known_files() -> None:
     assert "area_search_2uav_target_confirm" in names
 
 
+def test_algorithms_endpoint_lists_supported_versions() -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/algorithms")
+
+    assert response.status_code == 200
+    payload = response.json()
+    versions = {item["version"] for item in payload["algorithms"]}
+    assert payload["default_version"] == "baseline_sparse_boustrophedon"
+    assert versions == {
+        "baseline_sparse_boustrophedon",
+        "segment_sweep_v1",
+        "adaptive_component_sweep_v1",
+    }
+
+
 def test_reset_returns_state_with_map_uavs_and_coverage() -> None:
     client = TestClient(app)
 
@@ -49,6 +65,44 @@ def test_reset_returns_state_with_map_uavs_and_coverage() -> None:
     assert state["map"]["terrain"]
     assert len(state["uavs"]) == 2
     assert state["global_coverage"] >= 0.0
+    assert state["algorithm_version"] == "baseline_sparse_boustrophedon"
+
+
+def test_reset_can_override_algorithm_without_modifying_default_config() -> None:
+    client = TestClient(app)
+    default_config = Path("config/default.yaml")
+    before = default_config.read_text(encoding="utf-8")
+
+    response = client.post(
+        "/api/sim/reset",
+        json={
+            "config_path": "config/default.yaml",
+            "scenario_path": "config/scenarios/area_search_1uav.yaml",
+            "algorithm_version": "adaptive_component_sweep_v1",
+        },
+    )
+
+    assert response.status_code == 200
+    state = response.json()
+    assert state["algorithm_version"] == "adaptive_component_sweep_v1"
+    assert state["metrics"]["algorithm_version"] == "adaptive_component_sweep_v1"
+    assert default_config.read_text(encoding="utf-8") == before
+
+
+def test_reset_rejects_unknown_algorithm_version() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/sim/reset",
+        json={
+            "config_path": "config/default.yaml",
+            "scenario_path": "config/scenarios/area_search_1uav.yaml",
+            "algorithm_version": "missing_algorithm",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "unknown algorithm_version" in response.text
 
 
 def test_step_advances_time_and_records_commands_and_acks() -> None:

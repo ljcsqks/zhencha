@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { simulationClient } from "../api/client";
-import type { EventRequest, ExportResponse, ScenarioInfo, SimulationState } from "../types/sim";
+import type { AlgorithmInfo, EventRequest, ExportResponse, ScenarioInfo, SimulationState } from "../types/sim";
 import {
   emptySimulationClientState,
   mergeSimulationState,
@@ -29,6 +29,9 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   scenarios: ScenarioInfo[];
   selectedScenario?: string;
   setSelectedScenario(path: string): void;
+  algorithms: AlgorithmInfo[];
+  selectedAlgorithmVersion?: string;
+  setSelectedAlgorithmVersion(version: string): void;
   connected: boolean;
   connectionStatus: "connected" | "reconnecting" | "offline";
   running: boolean;
@@ -58,6 +61,8 @@ export function useSimulation(): UseSimulationResult {
   const [clientState, setClientState] = useState<SimulationClientState>(() => emptySimulationClientState());
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
   const [selectedScenario, setSelectedScenario] = useState<string>();
+  const [algorithms, setAlgorithms] = useState<AlgorithmInfo[]>([]);
+  const [selectedAlgorithmVersion, setSelectedAlgorithmVersion] = useState<string>();
   const [connected, setConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "reconnecting" | "offline">("offline");
   const [error, setError] = useState<string>();
@@ -112,6 +117,16 @@ export function useSimulation(): UseSimulationResult {
     }
   }, []);
 
+  const loadAlgorithms = useCallback(async () => {
+    try {
+      const response = await simulationClient.getAlgorithms();
+      setAlgorithms(response.algorithms);
+      setSelectedAlgorithmVersion((current) => current || response.default_version);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   const refreshFullState = useCallback(async () => {
     await runRequest(async () => simulationClient.getState(true, "full"));
   }, [runRequest]);
@@ -157,6 +172,7 @@ export function useSimulation(): UseSimulationResult {
 
   useEffect(() => {
     loadScenarios();
+    loadAlgorithms();
     const close = simulationClient.connectWebSocket(
       applyState,
       (status) => {
@@ -175,7 +191,7 @@ export function useSimulation(): UseSimulationResult {
       setError,
     );
     return close;
-  }, [applyState, loadScenarios]);
+  }, [applyState, loadAlgorithms, loadScenarios]);
 
   useEffect(() => {
     if (!clientState.needsFullMapRefresh || refreshingRef.current) {
@@ -197,7 +213,7 @@ export function useSimulation(): UseSimulationResult {
       reset: () =>
         runRequest(async () => {
           const scenarioPath = selectedScenario || scenarios[0]?.path || "config/scenarios/area_search_1uav.yaml";
-          return simulationClient.resetSimulation("config/default.yaml", scenarioPath);
+          return simulationClient.resetSimulation("config/default.yaml", scenarioPath, selectedAlgorithmVersion);
         }),
       step: (steps = 1) => runRequest(async () => simulationClient.stepSimulation(steps)),
       start: (intervalMs = 100) => runRequest(async () => simulationClient.startSimulation(intervalMs)),
@@ -231,7 +247,17 @@ export function useSimulation(): UseSimulationResult {
           data: {},
         }),
     }),
-    [exportRun, fetchMetrics, loadScenarios, postEventAndStep, refreshFullState, runRequest, scenarios, selectedScenario],
+    [
+      exportRun,
+      fetchMetrics,
+      loadScenarios,
+      postEventAndStep,
+      refreshFullState,
+      runRequest,
+      scenarios,
+      selectedAlgorithmVersion,
+      selectedScenario,
+    ],
   );
 
   return {
@@ -240,6 +266,9 @@ export function useSimulation(): UseSimulationResult {
     scenarios,
     selectedScenario,
     setSelectedScenario,
+    algorithms,
+    selectedAlgorithmVersion,
+    setSelectedAlgorithmVersion,
     connected,
     connectionStatus,
     running: Boolean(clientState.currentState?.running),

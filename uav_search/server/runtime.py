@@ -14,6 +14,7 @@ from uav_search.core.data_types import CellType, Event, EventPriority, EventType
 from uav_search.core.scheduler import Scheduler
 from uav_search.evaluation.metrics import compute_metrics
 from uav_search.maps.map_loader import build_grid_map
+from uav_search.server.algorithms import algorithms_payload, validate_algorithm_version
 from uav_search.server.schemas import EventRequest
 from uav_search.server.state import build_state
 from uav_search.simulation.scenario_events import ScenarioEventInjector
@@ -51,9 +52,15 @@ class SimulationRuntime:
     def set_state_callback(self, callback: StateCallback | None) -> None:
         self._state_callback = callback
 
-    def reset(self, config_path: str | Path | None = None, scenario_path: str | Path | None = None) -> dict[str, Any]:
+    def reset(
+        self,
+        config_path: str | Path | None = None,
+        scenario_path: str | Path | None = None,
+        algorithm_version: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             self._pause_unlocked()
+            algorithm_override = validate_algorithm_version(algorithm_version)
             next_config_path = Path(config_path or self.config_path)
             next_scenario_path = Path(scenario_path or self.scenario_path)
             if not next_config_path.exists():
@@ -67,6 +74,8 @@ class SimulationRuntime:
             self._recent_events = []
             self._event_log = []
             self.config = load_config(self.config_path, self.scenario_path)
+            if algorithm_override:
+                self.config.setdefault("algorithm", {})["version"] = algorithm_override
             validate_config(self.config)
             self.scenario = self.config.get("scenario") or load_yaml(self.scenario_path)
             self.grid_map = build_grid_map(self.config)
@@ -190,6 +199,7 @@ class SimulationRuntime:
                 "snapshots.json": {
                     "run_id": self.run_id,
                     "scenario_name": str(self.scenario.get("name", Path(self.scenario_path).stem)),
+                    "algorithm_version": self.config.get("algorithm", {}).get("version"),
                     "summary": summary,
                     "map": final_state.get("map"),
                     "steps": self.simulator.snapshots,
@@ -224,6 +234,9 @@ class SimulationRuntime:
                 }
             )
         return scenarios
+
+    def get_algorithms(self) -> dict[str, Any]:
+        return algorithms_payload()
 
     async def _run_loop(self, interval_s: float) -> None:
         try:

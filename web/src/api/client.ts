@@ -1,4 +1,12 @@
-import type { EventRequest, EventResponse, ExportResponse, ScenarioListResponse, SimulationState, StateLevel } from "../types/sim";
+import type {
+  AlgorithmListResponse,
+  EventRequest,
+  EventResponse,
+  ExportResponse,
+  ScenarioListResponse,
+  SimulationState,
+  StateLevel,
+} from "../types/sim";
 
 type FetchLike = typeof fetch;
 export type WebSocketStatus = "connected" | "reconnecting" | "offline";
@@ -12,7 +20,8 @@ interface ClientOptions {
 export interface SimulationClient {
   getHealth(): Promise<Record<string, unknown>>;
   getScenarios(): Promise<ScenarioListResponse>;
-  resetSimulation(configPath: string, scenarioPath: string): Promise<SimulationState>;
+  getAlgorithms(): Promise<AlgorithmListResponse>;
+  resetSimulation(configPath: string, scenarioPath: string, algorithmVersion?: string): Promise<SimulationState>;
   stepSimulation(steps: number): Promise<SimulationState>;
   startSimulation(tickIntervalMs: number): Promise<SimulationState>;
   pauseSimulation(): Promise<SimulationState>;
@@ -57,10 +66,15 @@ export function createSimulationClient(options: ClientOptions = {}): SimulationC
   return {
     getHealth: () => request<Record<string, unknown>>("/api/health"),
     getScenarios: () => request<ScenarioListResponse>("/api/scenarios"),
-    resetSimulation: (configPath, scenarioPath) =>
+    getAlgorithms: () => request<AlgorithmListResponse>("/api/algorithms"),
+    resetSimulation: (configPath, scenarioPath, algorithmVersion) =>
       request<SimulationState>("/api/sim/reset", {
         method: "POST",
-        body: JSON.stringify({ config_path: configPath, scenario_path: scenarioPath }),
+        body: JSON.stringify({
+          config_path: configPath,
+          scenario_path: scenarioPath,
+          ...(algorithmVersion ? { algorithm_version: algorithmVersion } : {}),
+        }),
       }),
     stepSimulation: (steps) =>
       request<SimulationState>("/api/sim/step", {

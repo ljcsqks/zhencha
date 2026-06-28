@@ -69,12 +69,20 @@ export interface ScenarioInfo {
   description?: string;
 }
 
+export interface AlgorithmInfo {
+  version: string;
+  label: string;
+  description: string;
+}
+
 export interface SimulationState {
   time_s: number;
   tick: number;
   running: boolean;
   run_id: string;
   scenario_name: string;
+  algorithm_version?: string;
+  available_algorithm_versions?: string[];
   global_coverage: number;
   priority_coverage: number;
   uavs: UavState[];
@@ -115,6 +123,11 @@ export interface EventRequest {
 
 export interface ScenarioListResponse {
   scenarios: ScenarioInfo[];
+}
+
+export interface AlgorithmListResponse {
+  algorithms: AlgorithmInfo[];
+  default_version: string;
 }
 
 export interface EventResponse {

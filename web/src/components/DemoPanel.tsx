@@ -36,6 +36,7 @@ export function DemoPanel({ sim }: Props) {
         <h2>Demos</h2>
         <Clapperboard size={16} />
       </div>
+      <p className="panel-note">算法可在 Control 面板中选择，Reset 后生效。</p>
       <div className="demo-list">
         {demos.map((scenario) => {
           const info = DEMOS[scenario.name] || {

@@ -20,6 +20,8 @@ npm run dev
 
 Open `http://127.0.0.1:5173`.
 
+The Control panel includes an Algorithm selector for development and demo comparisons. The default remains `baseline_sparse_boustrophedon`. Choose another algorithm, then click `Reset` to apply it; switching the selector alone does not change the current run. `adaptive_component_sweep_v1` is a candidate optimization planner worth comparing on 5-UAV, maze, and fragmented-area scenarios.
+
 ## Demo 1: Multi-UAV Search
 
 Select `demo_search_3uav` from the Demo panel.
@@ -33,6 +35,8 @@ Watch:
 - UAV trajectories and active planned paths on the map.
 - `global_coverage`, `priority_coverage`, and `total_distance_m`.
 - Acceptance panel rows for coverage, priority coverage, and no-fly violations.
+
+For planner comparison, rerun the same scenario with `adaptive_component_sweep_v1` selected in the Control panel and compare `algorithm_version`, `time_to_95_coverage_s`, `total_distance_m`, and `redundant_coverage_rate`.
 
 ## Demo 2: Target Confirmation
 
@@ -106,6 +110,8 @@ Files:
 - `config.yaml`: copied base config.
 - `summary.json`: compact demo summary.
 
+`summary.json` includes the actual `algorithm_version` used for that run, so exported baseline and adaptive runs can be compared later.
+
 ## Replay Run
 
 1. In the Replay panel, click `Load snapshots.json`.
@@ -124,4 +130,4 @@ Replay mode is clearly marked as `Replay`. Real-time start, event injection, obs
 - No target strike or attack logic.
 - No Docker in this phase.
 - No 3D or GIS view.
-- The current search algorithm still has known 5-UAV efficiency issues; Phase 7c does not optimize it.
+- Algorithm selection is for research and demo comparison. The candidate adaptive planner improves some 5-UAV and maze cases but is not the default algorithm yet.

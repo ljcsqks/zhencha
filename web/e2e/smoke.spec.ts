@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import fs from "node:fs";
 import path from "node:path";
 
 test("simulation console can run demos, export, replay, and show acceptance", async ({ page, request }) => {
@@ -8,7 +9,10 @@ test("simulation console can run demos, export, replay, and show acceptance", as
   await expect(page.getByText(/PASS|WARN|FAIL/).first()).toBeVisible();
 
   await page.getByRole("button", { name: /Multi-UAV Search/i }).click();
+  await expect(page.getByLabel("Algorithm")).toBeVisible();
+  await page.getByLabel("Algorithm").selectOption("adaptive_component_sweep_v1");
   await page.getByRole("button", { name: /Reset/i }).click();
+  await expect(page.getByText(/adaptive_component_sweep_v1/).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Mission Map" })).toBeVisible();
   const canvas = page.locator("canvas.map-canvas");
   await expect(canvas).toBeVisible();
@@ -30,6 +34,19 @@ test("simulation console can run demos, export, replay, and show acceptance", as
   expect(exportResponse.ok()).toBe(true);
   const exportPayload = await exportResponse.json();
   expect(exportPayload.files).toContain("snapshots.json");
+  const adaptiveSummary = JSON.parse(fs.readFileSync(path.resolve("..", exportPayload.export_dir, "summary.json"), "utf-8"));
+  expect(adaptiveSummary.algorithm_version).toBe("adaptive_component_sweep_v1");
+
+  await page.getByLabel("Algorithm").selectOption("baseline_sparse_boustrophedon");
+  await page.getByRole("button", { name: /Reset/i }).click();
+  await expect(page.getByText(/baseline_sparse_boustrophedon/).first()).toBeVisible();
+  await page.getByRole("button", { name: /Step 1/i }).click();
+  const baselineExport = await request.post("http://127.0.0.1:8000/api/sim/export");
+  expect(baselineExport.ok()).toBe(true);
+  const baselinePayload = await baselineExport.json();
+  const baselineSummary = JSON.parse(fs.readFileSync(path.resolve("..", baselinePayload.export_dir, "summary.json"), "utf-8"));
+  expect(baselineSummary.algorithm_version).toBe("baseline_sparse_boustrophedon");
+  expect(baselineSummary.algorithm_version).not.toBe(adaptiveSummary.algorithm_version);
 
   await page.locator('input[type="file"]').setInputFiles(path.resolve("..", exportPayload.export_dir, "snapshots.json"));
   await expect(page.getByText(/Replay mode/i)).toBeVisible({ timeout: 10000 });
