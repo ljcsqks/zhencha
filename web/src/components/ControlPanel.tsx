@@ -24,7 +24,7 @@ export function ControlPanel({ sim }: Props) {
         </select>
       </label>
       <label className="field">
-        <span>Algorithm</span>
+        <span>Algorithm · R&D compare</span>
         <select
           value={sim.selectedAlgorithmVersion || ""}
           onChange={(event) => sim.setSelectedAlgorithmVersion(event.target.value)}
@@ -37,7 +37,8 @@ export function ControlPanel({ sim }: Props) {
           ))}
         </select>
         <small className="field-note">
-          {sim.algorithms.find((item) => item.version === sim.selectedAlgorithmVersion)?.description || "Reset applies the selected algorithm."}
+          {sim.algorithms.find((item) => item.version === sim.selectedAlgorithmVersion)?.description ||
+            "Research comparison only. Reset applies the selected algorithm."}
         </small>
       </label>
       <div className="algorithm-status">

@@ -88,7 +88,7 @@ def test_compute_metrics_counts_events_and_coverage() -> None:
     assert metrics.interrupted_task_resume_rate == 1.0
     assert metrics.post_95_extra_time_s == 0.0
     assert metrics.post_95_extra_distance_m == 0.0
-    assert metrics.algorithm_version == "baseline_sparse_boustrophedon"
+    assert metrics.algorithm_version == "adaptive_component_sweep_v1"
     assert metrics.code_version
     assert metrics.config_hash
     assert set(metrics.diagnostics) == {
@@ -116,5 +116,5 @@ def test_save_metrics_writes_json(tmp_path: Path) -> None:
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["run_id"] == "empty"
-    assert payload["algorithm_version"] == "baseline_sparse_boustrophedon"
+    assert payload["algorithm_version"] == "adaptive_component_sweep_v1"
     assert "diagnostics" in payload

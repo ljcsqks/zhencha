@@ -61,6 +61,8 @@ npm run dev
 - WebSocket status is shown as `connected`, `reconnecting`, or `offline`. Reconnect uses capped backoff and refreshes full state after reconnection; invalid WebSocket JSON is reported as an error without crashing the UI.
 - Replay mode uses local JSON only. While replay is active, real-time controls and event injection are hidden to avoid mixing replay inspection with live simulation.
 - The current `algorithm_version` is included in state, metrics, and exported summaries. This is primarily for development comparison and demo traceability.
+- The Algorithm selector is marked as an R&D comparison control. The default remains `adaptive_component_sweep_v1`; choose `baseline_sparse_boustrophedon` only when running a comparison or investigating a regression.
+- Exported summaries and fetched metrics include planned-vs-actual coverage explanation fields so demo viewers can distinguish initial plan estimates from coverage added by connectors, supplemental tasks, dynamic updates, or post-goal motion.
 
 ## Known Limits
 

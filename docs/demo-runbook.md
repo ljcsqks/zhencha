@@ -22,6 +22,14 @@ Open `http://127.0.0.1:5173`.
 
 The Control panel includes an Algorithm selector for development and demo comparisons. The default is now `adaptive_component_sweep_v1`, the optimized component-level planner. Choose another algorithm, then click `Reset` to apply it; switching the selector alone does not change the current run. `baseline_sparse_boustrophedon` remains available as the internal comparison baseline.
 
+For regression checks outside the Web console, run:
+
+```bash
+python -m uav_search.tools.default_algorithm_regression
+```
+
+The command writes `runs/default_algorithm_regression_<timestamp>/` with baseline metrics, default adaptive metrics, and PASS/WARN/FAIL summaries.
+
 ## Demo 1: Multi-UAV Search
 
 Select `demo_search_3uav` from the Demo panel.

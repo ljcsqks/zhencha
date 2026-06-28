@@ -240,3 +240,5 @@ def test_adaptive_fleet_planned_coverage_aggregates_multiple_uav_tasks_and_prior
     assert segment_quality["fleet_planned_coverage_ratio"] == 6 / 18
     assert segment_quality["fleet_planned_priority_coverage_ratio"] == 1.0
     assert segment_quality["fleet_planned_vs_actual_coverage_error"] == -6 / 18
+    assert segment_quality["planned_actual_gap_abs"] == 6 / 18
+    assert "below plan" in segment_quality["planned_vs_actual_explanation"]

@@ -17,7 +17,7 @@ from uav_search.uav.fleet_manager import FleetManager
 def algorithm_version(config: dict[str, Any] | None = None, override: str | None = None) -> str:
     if override:
         return override
-    return str((config or {}).get("algorithm", {}).get("version", "baseline_sparse_boustrophedon"))
+    return str((config or {}).get("algorithm", {}).get("version", "adaptive_component_sweep_v1"))
 
 
 def code_version() -> str:
@@ -63,6 +63,9 @@ def compute_diagnostics(
         if float(segment_quality.get("fleet_planned_coverage_ratio", 0.0)) > 0
         else 0.0
     )
+    planned_error = float(segment_quality.get("fleet_planned_vs_actual_coverage_error", 0.0) or 0.0)
+    segment_quality["planned_actual_gap_abs"] = abs(planned_error)
+    segment_quality["planned_vs_actual_explanation"] = _planned_vs_actual_explanation(planned_error, planned_ratio)
     command_quality = _command_quality(snapshots)
     scheduler_quality = _scheduler_quality(snapshots)
     return {
@@ -74,6 +77,16 @@ def compute_diagnostics(
         "command_quality": command_quality,
         "scheduler_quality": scheduler_quality,
     }
+
+
+def _planned_vs_actual_explanation(error: float, planned_ratio: float) -> str:
+    if planned_ratio <= 0:
+        return "planned coverage unavailable; this run may use baseline-style tasks without adaptive metadata"
+    if abs(error) <= 0.03:
+        return "actual coverage is close to planned coverage"
+    if error > 0:
+        return "actual exceeds plan because connectors, supplemental tasks, and post-goal motion can cover extra cells"
+    return "actual is below plan because cancellations, blocked paths, or dynamic updates can prevent planned cells from being visited"
 
 
 def _reachability_quality(grid_map: GridMap, fleet: FleetManager) -> dict[str, Any]:

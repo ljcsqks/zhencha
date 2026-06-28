@@ -78,6 +78,9 @@ def test_export_run_writes_required_files_and_summary() -> None:
         "post_95_extra_distance_m",
         "max_connector_length",
         "idle_time_ratio",
+        "planned_coverage_ratio",
+        "planned_actual_gap_abs",
+        "planned_vs_actual_explanation",
         "exported_at",
     ):
         assert field in summary

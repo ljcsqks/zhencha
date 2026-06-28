@@ -476,6 +476,13 @@ def _export_summary(
         "segment_count_total": _nested_metric(metrics, ["diagnostics", "segment_quality", "segment_count_total"], 0),
         "unique_segment_count": _nested_metric(metrics, ["diagnostics", "segment_quality", "unique_segment_count"], 0),
         "segment_workload_balance": _nested_metric(metrics, ["diagnostics", "segment_quality", "segment_workload_balance"], 1.0),
+        "planned_coverage_ratio": _nested_metric(metrics, ["diagnostics", "segment_quality", "fleet_planned_coverage_ratio"], 0.0),
+        "planned_actual_gap_abs": _nested_metric(metrics, ["diagnostics", "segment_quality", "planned_actual_gap_abs"], 0.0),
+        "planned_vs_actual_explanation": _nested_metric(
+            metrics,
+            ["diagnostics", "segment_quality", "planned_vs_actual_explanation"],
+            "planned coverage unavailable",
+        ),
         "estimated_connector_cost_per_uav": _nested_metric(metrics, ["diagnostics", "segment_quality", "estimated_connector_cost_per_uav"], {}),
         "idle_time_ratio": _idle_time_ratio(metrics.get("diagnostics", {})),
         "exported_at": datetime.now(timezone.utc).isoformat(),

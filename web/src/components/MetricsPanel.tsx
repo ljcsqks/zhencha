@@ -48,6 +48,8 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
           <span>clusters {formatMetric(adaptiveDiagnostics.cluster_count_total)}</span>
           <span>frontload {formatMetric(adaptiveDiagnostics.simple_frontload_enabled)}</span>
           <span>planned {formatMetric(adaptiveDiagnostics.fleet_planned_coverage_ratio)}</span>
+          <span>gap {formatMetric(adaptiveDiagnostics.planned_actual_gap_abs)}</span>
+          <span>{formatMetric(adaptiveDiagnostics.planned_vs_actual_explanation)}</span>
         </div>
       )}
     </section>
