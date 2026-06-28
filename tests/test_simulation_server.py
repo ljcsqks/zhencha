@@ -38,7 +38,7 @@ def test_algorithms_endpoint_lists_supported_versions() -> None:
     assert response.status_code == 200
     payload = response.json()
     versions = {item["version"] for item in payload["algorithms"]}
-    assert payload["default_version"] == "baseline_sparse_boustrophedon"
+    assert payload["default_version"] == "adaptive_component_sweep_v1"
     assert versions == {
         "baseline_sparse_boustrophedon",
         "segment_sweep_v1",
@@ -65,7 +65,7 @@ def test_reset_returns_state_with_map_uavs_and_coverage() -> None:
     assert state["map"]["terrain"]
     assert len(state["uavs"]) == 2
     assert state["global_coverage"] >= 0.0
-    assert state["algorithm_version"] == "baseline_sparse_boustrophedon"
+    assert state["algorithm_version"] == "adaptive_component_sweep_v1"
 
 
 def test_reset_can_override_algorithm_without_modifying_default_config() -> None:

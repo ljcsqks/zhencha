@@ -4,7 +4,7 @@ Phase 7a adds a single-user React + Vite + TypeScript console over the FastAPI S
 
 Phase 7c adds demo presets, server-side run export, local snapshots replay, and an acceptance panel for PASS/WARN/FAIL demo checks. See `docs/demo-runbook.md` for the operator script.
 
-Phase 8b-6a adds a lightweight Algorithm selector for research and demo comparison. The backend default remains `baseline_sparse_boustrophedon`; selecting another algorithm in the Web console only affects the next `Reset` request and does not modify `config/default.yaml`.
+Phase 8b-6a adds a lightweight Algorithm selector for research and demo comparison. Phase 8b-6b promotes `adaptive_component_sweep_v1` as the default planner; selecting another algorithm in the Web console only affects the next `Reset` request and does not rewrite `config/default.yaml`.
 
 ## Start Backend
 
@@ -34,7 +34,7 @@ npm run dev
 ## Common Operations
 
 - Select a scenario and press `Reset`.
-- Select an Algorithm when comparing planners. `Baseline Sparse Boustrophedon` is the current default, `Segment Sweep v1` is useful for checking scanline segment behavior, and `Adaptive Component Sweep v1` is the candidate optimization planner for 5-UAV, maze, and fragmented-area comparisons. Changing the selector does not affect a running simulation until `Reset`.
+- Select an Algorithm when comparing planners. `Adaptive Component Sweep v1` is the current default, `Baseline Sparse Boustrophedon` is the internal comparison baseline, and `Segment Sweep v1` is useful for checking scanline segment behavior. Changing the selector does not affect a running simulation until `Reset`.
 - Use `Step 1`, `Step N`, `Start`, and `Pause` to control simulation time.
 - Use `Refresh full state` when a full map resync is needed.
 - Use `Fetch metrics` for the full `compute_metrics` result. Normal tick states use a lightweight metrics summary.

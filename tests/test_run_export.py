@@ -81,7 +81,7 @@ def test_export_run_writes_required_files_and_summary() -> None:
         "exported_at",
     ):
         assert field in summary
-    assert summary["algorithm_version"] == "baseline_sparse_boustrophedon"
+    assert summary["algorithm_version"] == "adaptive_component_sweep_v1"
 
 
 def test_export_summary_uses_reset_algorithm_override() -> None:

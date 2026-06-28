@@ -7,21 +7,21 @@ SUPPORTED_ALGORITHMS: tuple[dict[str, str], ...] = (
     {
         "version": "baseline_sparse_boustrophedon",
         "label": "Baseline Sparse Boustrophedon",
-        "description": "稳定基线：普通区域连续割草，当前默认算法。",
+        "description": "Stable internal comparison baseline with sparse boustrophedon coverage.",
     },
     {
         "version": "segment_sweep_v1",
         "label": "Segment Sweep v1",
-        "description": "扫描线片段规划：复杂障碍场景有优势，但普通场景可能过度切分。",
+        "description": "Scanline segment planner for obstacle-heavy scenes; useful for algorithm diagnostics.",
     },
     {
         "version": "adaptive_component_sweep_v1",
         "label": "Adaptive Component Sweep v1",
-        "description": "自适应组件规划：简单区域走 baseline，复杂区域走 cluster segment。",
+        "description": "Current default planner: baseline-style simple regions, clustered sweeps for complex regions.",
     },
 )
 
-DEFAULT_ALGORITHM_VERSION = "baseline_sparse_boustrophedon"
+DEFAULT_ALGORITHM_VERSION = "adaptive_component_sweep_v1"
 SUPPORTED_ALGORITHM_VERSIONS = {item["version"] for item in SUPPORTED_ALGORITHMS}
 
 

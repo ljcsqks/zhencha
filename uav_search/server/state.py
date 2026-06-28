@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from uav_search.server.algorithms import algorithms_payload
+from uav_search.server.algorithms import DEFAULT_ALGORITHM_VERSION, algorithms_payload
 from uav_search.evaluation.metrics import compute_metrics
 from uav_search.maps.grid_map import GridMap
 from uav_search.simulation.simulator import Simulator
@@ -28,7 +28,7 @@ def build_state(
 ) -> dict[str, Any]:
     latest = simulator.snapshots[-1] if simulator.snapshots else {}
     include_full_map = include_map and state_level == "full"
-    algorithm_version = str(config.get("algorithm", {}).get("version", "baseline_sparse_boustrophedon"))
+    algorithm_version = str(config.get("algorithm", {}).get("version", DEFAULT_ALGORITHM_VERSION))
     state = {
         "time_s": simulator.time_s,
         "tick": simulator._tick,
@@ -77,7 +77,7 @@ def metrics_summary(
                 config.get("search", {}).get("mission_complete_coverage_threshold", 0.95)
             ),
         )
-        summary["algorithm_version"] = str(config.get("algorithm", {}).get("version", "baseline_sparse_boustrophedon"))
+        summary["algorithm_version"] = str(config.get("algorithm", {}).get("version", DEFAULT_ALGORITHM_VERSION))
         return summary
     if not simulator.snapshots:
         return {
@@ -85,7 +85,7 @@ def metrics_summary(
             "priority_coverage": grid_map.coverage_rate(priority_only=True),
             "total_distance_m": sum(state.total_distance_m for state in fleet.get_all_states()),
             "no_fly_violations": 0,
-            "algorithm_version": str(config.get("algorithm", {}).get("version", "baseline_sparse_boustrophedon")),
+            "algorithm_version": str(config.get("algorithm", {}).get("version", DEFAULT_ALGORITHM_VERSION)),
         }
     metrics = compute_metrics(
         scenario_name,

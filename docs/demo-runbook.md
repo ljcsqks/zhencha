@@ -20,7 +20,7 @@ npm run dev
 
 Open `http://127.0.0.1:5173`.
 
-The Control panel includes an Algorithm selector for development and demo comparisons. The default remains `baseline_sparse_boustrophedon`. Choose another algorithm, then click `Reset` to apply it; switching the selector alone does not change the current run. `adaptive_component_sweep_v1` is a candidate optimization planner worth comparing on 5-UAV, maze, and fragmented-area scenarios.
+The Control panel includes an Algorithm selector for development and demo comparisons. The default is now `adaptive_component_sweep_v1`, the optimized component-level planner. Choose another algorithm, then click `Reset` to apply it; switching the selector alone does not change the current run. `baseline_sparse_boustrophedon` remains available as the internal comparison baseline.
 
 ## Demo 1: Multi-UAV Search
 
@@ -36,7 +36,7 @@ Watch:
 - `global_coverage`, `priority_coverage`, and `total_distance_m`.
 - Acceptance panel rows for coverage, priority coverage, and no-fly violations.
 
-For planner comparison, rerun the same scenario with `adaptive_component_sweep_v1` selected in the Control panel and compare `algorithm_version`, `time_to_95_coverage_s`, `total_distance_m`, and `redundant_coverage_rate`.
+For planner comparison, rerun the same scenario with `baseline_sparse_boustrophedon` selected in the Control panel and compare `algorithm_version`, `time_to_95_coverage_s`, `total_distance_m`, and `redundant_coverage_rate`.
 
 ## Demo 2: Target Confirmation
 
@@ -130,4 +130,4 @@ Replay mode is clearly marked as `Replay`. Real-time start, event injection, obs
 - No target strike or attack logic.
 - No Docker in this phase.
 - No 3D or GIS view.
-- Algorithm selection is for research and demo comparison. The candidate adaptive planner improves some 5-UAV and maze cases but is not the default algorithm yet.
+- Algorithm selection is for research and demo comparison. The default adaptive planner improves 5-UAV and maze cases while retaining baseline as a regression comparison option.

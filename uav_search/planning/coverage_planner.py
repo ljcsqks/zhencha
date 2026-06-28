@@ -912,6 +912,11 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
         )
         complex_components = [component_by_id[analysis.component_id] for analysis in analyses if analysis.kind == "complex"]
         tasks: list[Task] = []
+        simple_guardrail_metadata: dict[str, object] = self._simple_guardrail_metadata(
+            simple_cells=simple_cells,
+            analyses=analyses,
+            online=online,
+        )
 
         if simple_cells:
             simple_tasks = self.baseline.plan_initial_tasks(
@@ -928,6 +933,22 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 online=online,
                 grid_map=grid_map,
             )
+            if frontload_metadata.get("simple_frontload_enabled"):
+                simple_guardrail_metadata = {
+                    **simple_guardrail_metadata,
+                    "simple_guardrail_triggered_count": 0,
+                    "simple_guardrail_component_ids": [],
+                    "chosen_component_planner": {"simple": "frontload_baseline"},
+                }
+            else:
+                baseline_cost = sum(task.estimated_cost_m for task in simple_tasks)
+                simple_guardrail_metadata = {
+                    **simple_guardrail_metadata,
+                    "baseline_estimated_cost": baseline_cost,
+                    "adaptive_estimated_cost": baseline_cost,
+                    "estimated_connector_cost": sum(task.metadata.get("estimated_connector_cost_m", 0.0) for task in simple_tasks),
+                }
+            self.last_diagnostics.update(simple_guardrail_metadata)
             for task in simple_tasks:
                 self._mark_adaptive_task(
                     task,
@@ -950,30 +971,57 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
         if complex_segments and online:
             clusters = self.cluster_segments(complex_segments, grid_map)
             cluster_bundles = self.assign_clusters_to_uavs(clusters, online, grid_map)
-            for sequence, uav in enumerate(online, start=1):
-                ordered_clusters = self.order_clusters_for_uav(cluster_bundles.get(uav.id, []), uav.position, grid_map)
-                ordered_segments = [segment for cluster in ordered_clusters for segment in cluster.segments]
-                task = self._task_from_segments(
-                    task_id=f"adaptive_complex_{sequence:03d}",
-                    uav_id=uav.id,
-                    ordered_segments=ordered_segments,
-                    origin=uav.position,
-                    grid_map=grid_map,
-                    created_at=created_at,
+            complex_cells = set().union(*complex_components, set())
+            complex_guardrail_metadata, fallback_complex_tasks = self._complex_guardrail_result(
+                complex_cells=complex_cells,
+                complex_analyses=[analysis for analysis in analyses if analysis.kind == "complex"],
+                cluster_bundles=cluster_bundles,
+                grid_map=grid_map,
+                online=online,
+                sensor_radius_cells=sensor_radius_cells,
+                created_at=created_at,
+                reachability=reachability,
+            )
+            self.last_diagnostics.update(complex_guardrail_metadata)
+            if fallback_complex_tasks is not None:
+                for task in fallback_complex_tasks:
+                    self._mark_adaptive_task(
+                        task,
+                        component_ids=[analysis.component_id for analysis in analyses if analysis.kind == "complex"],
+                        simple_count=sum(1 for analysis in analyses if analysis.kind in {"simple", "tiny"}),
+                        complex_count=sum(1 for analysis in analyses if analysis.kind == "complex"),
+                        target_cells=complex_cells,
+                        sensor_radius_cells=sensor_radius_cells,
+                        grid_map=grid_map,
+                        extra_metadata=complex_guardrail_metadata,
                 )
-                if task is None:
-                    continue
-                self._mark_adaptive_task(
-                    task,
-                    component_ids=sorted({cluster.component_id for cluster in ordered_clusters}),
-                    simple_count=sum(1 for analysis in analyses if analysis.kind in {"simple", "tiny"}),
-                    complex_count=sum(1 for analysis in analyses if analysis.kind == "complex"),
-                    target_cells=reachable_cells,
-                    sensor_radius_cells=sensor_radius_cells,
-                    grid_map=grid_map,
-                    clusters=ordered_clusters,
-                )
-                tasks.append(task)
+                tasks.extend(fallback_complex_tasks)
+            else:
+                self.last_diagnostics.update(complex_guardrail_metadata)
+                for sequence, uav in enumerate(online, start=1):
+                    ordered_clusters = self.order_clusters_for_uav(cluster_bundles.get(uav.id, []), uav.position, grid_map)
+                    ordered_segments = [segment for cluster in ordered_clusters for segment in cluster.segments]
+                    task = self._task_from_segments(
+                        task_id=f"adaptive_complex_{sequence:03d}",
+                        uav_id=uav.id,
+                        ordered_segments=ordered_segments,
+                        origin=uav.position,
+                        grid_map=grid_map,
+                        created_at=created_at,
+                    )
+                    if task is None:
+                        continue
+                    self._mark_adaptive_task(
+                        task,
+                        component_ids=sorted({cluster.component_id for cluster in ordered_clusters}),
+                        simple_count=sum(1 for analysis in analyses if analysis.kind in {"simple", "tiny"}),
+                        complex_count=sum(1 for analysis in analyses if analysis.kind == "complex"),
+                        target_cells=reachable_cells,
+                        sensor_radius_cells=sensor_radius_cells,
+                        grid_map=grid_map,
+                        clusters=ordered_clusters,
+                    )
+                    tasks.append(task)
 
         self.last_diagnostics.update(
             {
@@ -983,6 +1031,8 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 "component_complexity": [analysis.__dict__ for analysis in analyses],
             }
         )
+        if simple_guardrail_metadata.get("simple_guardrail_triggered_count", 0) and not complex_segments:
+            return tasks
         return sorted(tasks, key=lambda task: (-task.priority, task.created_at, task.id))
 
     def plan_region_task(
@@ -1061,6 +1111,91 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 task.entry_point = task.coverage_waypoints[0]
                 task.metadata["frontload_reversed"] = True
         return metadata
+
+    def _simple_guardrail_metadata(
+        self,
+        *,
+        simple_cells: set[Position],
+        analyses: list[ComponentComplexity],
+        online: list[UAVState],
+    ) -> dict[str, object]:
+        config = self._adaptive_config()
+        enabled = bool(config.get("simple_guardrail_enabled", True))
+        simple_ids = [analysis.component_id for analysis in analyses if analysis.kind in {"simple", "tiny"}]
+        simple_scores = [analysis.complexity_score for analysis in analyses if analysis.kind in {"simple", "tiny"}]
+        conservative_uav_count = len(online) <= 3
+        obvious_complexity = max(simple_scores, default=0.0) > float(config.get("simple_guardrail_high_complexity_score", 2.0))
+        triggered = bool(enabled and simple_cells and conservative_uav_count and not obvious_complexity)
+        return {
+            "simple_guardrail_triggered_count": 1 if triggered else 0,
+            "simple_guardrail_component_ids": simple_ids if triggered else [],
+            "baseline_estimated_cost": 0.0,
+            "adaptive_estimated_cost": 0.0,
+            "estimated_connector_cost": 0.0,
+            "chosen_component_planner": {"simple": "baseline" if triggered else "adaptive"},
+            "simple_guardrail_max_cost_ratio": float(config.get("simple_guardrail_max_cost_ratio", 1.03)),
+            "simple_guardrail_max_connector_ratio": float(config.get("simple_guardrail_max_connector_ratio", 1.05)),
+        }
+
+    def _complex_guardrail_result(
+        self,
+        *,
+        complex_cells: set[Position],
+        complex_analyses: list[ComponentComplexity],
+        cluster_bundles: dict[str, list[SweepCluster]],
+        grid_map: GridMap,
+        online: list[UAVState],
+        sensor_radius_cells: int,
+        created_at: float,
+        reachability: ReachabilityIndex,
+    ) -> tuple[dict[str, object], list[Task] | None]:
+        config = self._adaptive_config()
+        enabled = bool(config.get("complex_guardrail_enabled", True))
+        baseline_tasks = self.baseline.plan_initial_tasks(
+            grid_map=grid_map,
+            uav_states=online,
+            sensor_radius_cells=sensor_radius_cells,
+            created_at=created_at,
+            reachability=reachability,
+            searchable_cells=complex_cells,
+        ) if complex_cells else []
+        baseline_costs = [task.estimated_cost_m for task in baseline_tasks]
+        adaptive_costs = list(self._cluster_bundle_costs(cluster_bundles, online, grid_map).values())
+        baseline_total = sum(baseline_costs)
+        adaptive_total = sum(adaptive_costs)
+        baseline_max = max(baseline_costs, default=0.0)
+        adaptive_max = max(adaptive_costs, default=0.0)
+        max_ratio = adaptive_max / max(baseline_max, grid_map.resolution_m)
+        total_ratio = adaptive_total / max(baseline_total, grid_map.resolution_m)
+        max_complexity = max((analysis.complexity_score for analysis in complex_analyses), default=0.0)
+        max_cost_ratio = float(config.get("complex_guardrail_max_bundle_cost_ratio", 1.35))
+        max_total_ratio = float(config.get("complex_guardrail_max_total_cost_ratio", 1.15))
+        max_complexity_score = float(config.get("complex_guardrail_max_complexity_score", 2.4))
+        triggered = bool(
+            enabled
+            and baseline_tasks
+            and adaptive_costs
+            and adaptive_max > baseline_max * max_cost_ratio
+            and adaptive_total > baseline_total * max_total_ratio
+            and max_complexity <= max_complexity_score
+        )
+        chosen = dict(self.last_diagnostics.get("chosen_component_planner", {}))
+        chosen["complex"] = "baseline" if triggered else "cluster"
+        metadata: dict[str, object] = {
+            "complex_guardrail_triggered_count": 1 if triggered else 0,
+            "complex_guardrail_component_ids": [analysis.component_id for analysis in complex_analyses] if triggered else [],
+            "complex_baseline_estimated_cost": baseline_total,
+            "complex_adaptive_estimated_cost": adaptive_total,
+            "complex_baseline_max_cost": baseline_max,
+            "complex_adaptive_max_cost": adaptive_max,
+            "complex_guardrail_max_bundle_cost_ratio": max_cost_ratio,
+            "complex_guardrail_max_total_cost_ratio": max_total_ratio,
+            "complex_guardrail_max_complexity_score": max_complexity_score,
+            "complex_guardrail_observed_bundle_cost_ratio": max_ratio,
+            "complex_guardrail_observed_total_cost_ratio": total_ratio,
+            "chosen_component_planner": chosen,
+        }
+        return metadata, baseline_tasks if triggered else None
 
     def cluster_segments(self, segments: list[SweepSegment], grid_map: GridMap) -> list[SweepCluster]:
         config = self.config.get("algorithm", {}).get("adaptive_component_sweep", {})
@@ -1254,20 +1389,121 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
         ordered: list[SweepCluster] = []
         current = origin
         cache = SegmentConnectorCostCache(planner_run_id=f"cluster_order_{id(self)}_{origin}_{len(clusters)}")
+        config = self._adaptive_config()
+        threshold_first = bool(config.get("threshold_first_ordering_enabled", True))
+        target_ratio = min(
+            1.0,
+            float(self.config.get("search", {}).get("mission_complete_coverage_threshold", 0.95))
+            + float(config.get("threshold_first_coverage_margin", 0.015)),
+        )
+        all_cluster_cells = set().union(*(cluster.coverage_cells for cluster in remaining), set())
+        threshold_target_cells = math.ceil(len(all_cluster_cells) * target_ratio)
+        threshold_phase_count = 0
+        low_gain_pre_threshold = 0
+        far_pre_threshold = 0
+        covered: set[Position] = set()
+        threshold_covered: set[Position] = set()
         while remaining:
-            idx, cluster = min(
-                enumerate(remaining),
-                key=lambda item: (
-                    item[1].component_id != ordered[-1].component_id if ordered else False,
-                    self._best_cluster_connection(current, item[1], grid_map, cache)[0],
-                    item[1].id,
-                ),
-            )
+            before_threshold = threshold_first and len(covered) < threshold_target_cells
+            if before_threshold:
+                idx, cluster, score_data = self._select_threshold_first_cluster(
+                    remaining,
+                    current,
+                    covered,
+                    ordered[-1].component_id if ordered else None,
+                    grid_map,
+                    cache,
+                )
+                threshold_phase_count += 1
+                if score_data["gain_per_meter"] < float(config.get("threshold_low_gain_per_meter", 0.03)):
+                    low_gain_pre_threshold += 1
+                if score_data["estimated_arrival_cost"] > max(grid_map.resolution_m, float(config.get("threshold_far_cluster_cost_m", 120.0))):
+                    far_pre_threshold += 1
+            else:
+                idx, cluster = min(
+                    enumerate(remaining),
+                    key=lambda item: (
+                        item[1].component_id != ordered[-1].component_id if ordered else False,
+                        self._best_cluster_connection(current, item[1], grid_map, cache)[0],
+                        item[1].id,
+                    ),
+                )
             ordered.append(cluster)
+            covered.update(cluster.coverage_cells)
+            if before_threshold:
+                threshold_covered.update(cluster.coverage_cells)
             _, _, current = self._best_cluster_connection(current, cluster, grid_map, cache)
             remaining.pop(idx)
+        estimated_threshold_ratio = len(threshold_covered & all_cluster_cells) / len(all_cluster_cells) if all_cluster_cells else 1.0
+        threshold_jumps = sum(
+            1
+            for first, second in zip(ordered[:threshold_phase_count], ordered[1:threshold_phase_count])
+            if first.component_id != second.component_id
+        )
+        self.last_diagnostics.update(
+            {
+                "threshold_phase_cluster_count": threshold_phase_count,
+                "post_threshold_cluster_count": max(0, len(ordered) - threshold_phase_count),
+                "estimated_threshold_coverage_ratio": min(1.0, estimated_threshold_ratio),
+                "threshold_first_ordering_enabled": threshold_first,
+                "low_gain_pre_threshold_cluster_count": low_gain_pre_threshold,
+                "far_pre_threshold_cluster_count": far_pre_threshold,
+                "threshold_phase_inter_component_jump_count": threshold_jumps,
+            }
+        )
         self._record_component_jump_diagnostics(ordered, grid_map)
         return ordered
+
+    def _select_threshold_first_cluster(
+        self,
+        clusters: list[SweepCluster],
+        current: Position,
+        covered: set[Position],
+        current_component_id: str | None,
+        grid_map: GridMap,
+        cache: SegmentConnectorCostCache,
+    ) -> tuple[int, SweepCluster, dict[str, float]]:
+        scored: list[tuple[float, float, int, str, int, SweepCluster, dict[str, float]]] = []
+        priority_weight = float(self.config.get("search", {}).get("priority_cell_weight", 3.0))
+        for index, cluster in enumerate(clusters):
+            connector, _, _ = self._best_cluster_connection(current, cluster, grid_map, cache)
+            if math.isinf(connector):
+                connector = _manhattan(current, cluster.entry_candidates[0]) * grid_map.resolution_m
+            marginal = cluster.coverage_cells - covered
+            marginal_priority = cluster.priority_cells - covered
+            weighted_gain = len(marginal) + priority_weight * len(marginal_priority)
+            estimated_arrival = connector + cluster.sweep_cost_m + cluster.estimated_internal_connector_cost_m
+            gain_per_meter = weighted_gain / max(estimated_arrival, grid_map.resolution_m)
+            score = gain_per_meter
+            scored.append(
+                (
+                    score,
+                    gain_per_meter,
+                    -index,
+                    cluster.id,
+                    index,
+                    cluster,
+                    {
+                        "marginal_coverage_cells": float(len(marginal)),
+                        "marginal_priority_cells": float(len(marginal_priority)),
+                        "estimated_arrival_cost": float(estimated_arrival),
+                        "gain_per_meter": float(gain_per_meter),
+                        "threshold_contribution_score": float(score),
+                    },
+                )
+            )
+        if not scored:
+            raise ValueError("cannot order empty cluster list")
+        best = max(scored, key=lambda item: (item[0], item[1], item[2], item[3]))
+        if current_component_id is None:
+            return best[4], best[5], best[6]
+        same_component = [item for item in scored if item[5].component_id == current_component_id]
+        if same_component and best[5].component_id != current_component_id:
+            best_same = max(same_component, key=lambda item: (item[0], item[1], item[2], item[3]))
+            switch_ratio = float(self._adaptive_config().get("component_switch_gain_ratio", 1.35))
+            if best[1] < best_same[1] * switch_ratio:
+                return best_same[4], best_same[5], best_same[6]
+        return best[4], best[5], best[6]
 
     def _adaptive_config(self) -> dict:
         return dict(self.config.get("algorithm", {}).get("adaptive_component_sweep", {}))
@@ -1443,6 +1679,32 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 "frontload_coverage_target",
                 "frontload_priority_cells",
                 "frontload_uav_ids",
+                "simple_guardrail_triggered_count",
+                "simple_guardrail_component_ids",
+                "baseline_estimated_cost",
+                "adaptive_estimated_cost",
+                "estimated_connector_cost",
+                "chosen_component_planner",
+                "simple_guardrail_max_cost_ratio",
+                "simple_guardrail_max_connector_ratio",
+                "complex_guardrail_triggered_count",
+                "complex_guardrail_component_ids",
+                "complex_baseline_estimated_cost",
+                "complex_adaptive_estimated_cost",
+                "complex_baseline_max_cost",
+                "complex_adaptive_max_cost",
+                "complex_guardrail_max_bundle_cost_ratio",
+                "complex_guardrail_max_total_cost_ratio",
+                "complex_guardrail_max_complexity_score",
+                "complex_guardrail_observed_bundle_cost_ratio",
+                "complex_guardrail_observed_total_cost_ratio",
+                "threshold_phase_cluster_count",
+                "post_threshold_cluster_count",
+                "estimated_threshold_coverage_ratio",
+                "threshold_first_ordering_enabled",
+                "low_gain_pre_threshold_cluster_count",
+                "far_pre_threshold_cluster_count",
+                "threshold_phase_inter_component_jump_count",
             }:
                 task.metadata[key] = value
 

@@ -35,8 +35,8 @@ describe("simulation API client", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        algorithms: [{ version: "baseline_sparse_boustrophedon", label: "Baseline", description: "Default" }],
-        default_version: "baseline_sparse_boustrophedon",
+        algorithms: [{ version: "adaptive_component_sweep_v1", label: "Adaptive", description: "Default" }],
+        default_version: "adaptive_component_sweep_v1",
       }),
     });
     const client = createSimulationClient({
@@ -47,7 +47,7 @@ describe("simulation API client", () => {
     const result = await client.getAlgorithms();
 
     expect(fetchMock).toHaveBeenCalledWith("http://backend.test/api/algorithms", expect.any(Object));
-    expect(result.default_version).toBe("baseline_sparse_boustrophedon");
+    expect(result.default_version).toBe("adaptive_component_sweep_v1");
   });
 
   it("opens websocket connections using the matching ws protocol", () => {

@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 
 from uav_search.core.data_types import CellType, Position, UAVState, UAVStatus
+from uav_search.core.config import load_config
 from uav_search.maps.grid_map import GridMap
+from uav_search.maps.map_loader import build_grid_map
 from uav_search.planning.coverage_planner import (
     AdaptiveComponentSweepPlanner,
     ComponentComplexityAnalyzer,
@@ -15,6 +17,7 @@ from uav_search.planning.coverage_planner import (
     simulate_planned_coverage,
 )
 from uav_search.planning.reachability import build_reachability_index
+from uav_search.uav.fleet_manager import FleetManager
 
 
 def _uav(uav_id: str, position: Position) -> UAVState:
@@ -54,14 +57,17 @@ def _cluster(
     *,
     allowed: set[str] | None = None,
     sweep_cost_m: float = 10.0,
+    component_id: str = "component_1",
+    coverage_cells: set[Position] | None = None,
 ) -> SweepCluster:
     segment = _segment(f"s{cluster_id.strip('c')}", start, end, allowed)
+    coverage = set(coverage_cells or {start, end})
     return SweepCluster(
         id=cluster_id,
-        component_id="component_1",
+        component_id=component_id,
         segment_ids=[segment.id],
         segments=[segment],
-        coverage_cells={start, end},
+        coverage_cells=coverage,
         priority_cells=set(),
         centroid=start,
         entry_candidates=[start, end],
@@ -446,3 +452,132 @@ def test_adaptive_5uav_simple_frontload_is_gated_to_large_five_uav_components() 
     )
 
     assert four_planner.last_diagnostics["simple_frontload_enabled"] is False
+
+
+def test_adaptive_simple_guardrail_records_baseline_choice_for_three_uav_simple_area() -> None:
+    grid_map = GridMap(width_m=240, height_m=160, resolution_m=10)
+    uavs = [_uav("uav_01", Position(0, 2)), _uav("uav_02", Position(0, 8)), _uav("uav_03", Position(0, 13))]
+    planner = AdaptiveComponentSweepPlanner(
+        {
+            "algorithm": {
+                "adaptive_component_sweep": {
+                    "simple_guardrail_enabled": True,
+                    "simple_guardrail_max_cost_ratio": 1.03,
+                    "simple_guardrail_max_connector_ratio": 1.05,
+                }
+            }
+        }
+    )
+
+    tasks = planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert tasks
+    assert planner.last_diagnostics["simple_guardrail_triggered_count"] >= 1
+    assert planner.last_diagnostics["chosen_component_planner"]["simple"] == "baseline"
+    assert all(task.metadata["simple_guardrail_triggered_count"] >= 1 for task in tasks)
+
+
+def test_threshold_first_cluster_ordering_can_jump_to_higher_gain_component_before_threshold() -> None:
+    grid_map = GridMap(width_m=220, height_m=60, resolution_m=10)
+    planner = AdaptiveComponentSweepPlanner(
+        {
+            "algorithm": {
+                "adaptive_component_sweep": {
+                    "threshold_first_ordering_enabled": True,
+                    "threshold_first_coverage_margin": 0.0,
+                    "component_switch_gain_ratio": 1.4,
+                }
+            },
+            "search": {"mission_complete_coverage_threshold": 0.6},
+        }
+    )
+    c1 = _cluster("c1", Position(1, 0), Position(2, 0), component_id="component_a", coverage_cells={Position(x, 0) for x in range(2)})
+    same_component_low_gain = _cluster(
+        "c2",
+        Position(3, 0),
+        Position(4, 0),
+        component_id="component_a",
+        coverage_cells={Position(3, 0)},
+    )
+    other_component_high_gain = _cluster(
+        "c3",
+        Position(5, 0),
+        Position(6, 0),
+        component_id="component_b",
+        coverage_cells={Position(x, 1) for x in range(10)},
+    )
+
+    ordered = planner.order_clusters_for_uav([c1, same_component_low_gain, other_component_high_gain], Position(0, 0), grid_map)
+
+    assert [cluster.id for cluster in ordered].index("c3") < [cluster.id for cluster in ordered].index("c2")
+    assert planner.last_diagnostics["threshold_first_ordering_enabled"] is True
+    assert planner.last_diagnostics["threshold_phase_cluster_count"] >= 1
+    assert planner.last_diagnostics["post_threshold_cluster_count"] >= 1
+
+
+def test_simple_guardrail_does_not_disable_5uav_frontload() -> None:
+    grid_map = GridMap(width_m=500, height_m=300, resolution_m=10)
+    config = {
+        "algorithm": {
+            "adaptive_component_sweep": {
+                "simple_guardrail_enabled": True,
+                "enable_5uav_simple_frontload": True,
+                "frontload_min_uav_count": 5,
+                "frontload_min_component_cells": 100,
+            }
+        }
+    }
+    uavs = [_uav(f"uav_{idx:02d}", Position(0, idx)) for idx in range(1, 6)]
+    planner = AdaptiveComponentSweepPlanner(config)
+
+    tasks = planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert tasks
+    assert planner.last_diagnostics["simple_frontload_enabled"] is True
+    assert planner.last_diagnostics["simple_guardrail_triggered_count"] == 0
+
+
+def test_adaptive_complex_guardrail_falls_back_for_fragmented_but_not_maze() -> None:
+    fragmented_planner, fragmented_tasks = _plan_adaptive_scenario("stress_fragmented_area_4uav_reachable")
+
+    assert fragmented_tasks
+    assert fragmented_planner.last_diagnostics["complex_guardrail_triggered_count"] == 1
+    assert fragmented_planner.last_diagnostics["chosen_component_planner"]["complex"] == "baseline"
+    assert all(task.metadata["complex_guardrail_triggered_count"] == 1 for task in fragmented_tasks)
+
+    maze_planner, maze_tasks = _plan_adaptive_scenario("stress_obstacle_maze_3uav")
+
+    assert maze_tasks
+    assert maze_planner.last_diagnostics["complex_guardrail_triggered_count"] == 0
+    assert maze_planner.last_diagnostics["chosen_component_planner"]["complex"] == "cluster"
+
+
+def _plan_adaptive_scenario(scenario_name: str) -> tuple[AdaptiveComponentSweepPlanner, list]:
+    config = load_config("config/default.yaml", f"config/scenarios/{scenario_name}.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config.get("scenario", {}))
+    uavs = fleet.get_all_states()
+    planner = AdaptiveComponentSweepPlanner(config)
+    tasks = planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=int(config["uav"]["sensor_radius_cells"]),
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+    return planner, tasks
