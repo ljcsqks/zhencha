@@ -11,7 +11,7 @@ test("simulation console can run demos, export, replay, and show acceptance", as
   await page.getByRole("button", { name: /Multi-UAV Search/i }).click();
   await expect(page.getByLabel("Algorithm")).toBeVisible();
   await page.getByLabel("Algorithm").selectOption("adaptive_component_sweep_v1");
-  await page.getByRole("button", { name: /Reset/i }).click();
+  await page.getByRole("button", { name: /Reset Custom/i }).click();
   await expect(page.getByText(/adaptive_component_sweep_v1/).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Mission Map" })).toBeVisible();
   const canvas = page.locator("canvas.map-canvas");
@@ -38,7 +38,7 @@ test("simulation console can run demos, export, replay, and show acceptance", as
   expect(adaptiveSummary.algorithm_version).toBe("adaptive_component_sweep_v1");
 
   await page.getByLabel("Algorithm").selectOption("baseline_sparse_boustrophedon");
-  await page.getByRole("button", { name: /Reset/i }).click();
+  await page.getByRole("button", { name: /Reset Custom/i }).click();
   await expect(page.getByText(/baseline_sparse_boustrophedon/).first()).toBeVisible();
   await page.getByRole("button", { name: /Step 1/i }).click();
   const baselineExport = await request.post("http://127.0.0.1:8000/api/sim/export");
@@ -59,16 +59,16 @@ test("simulation console can run demos, export, replay, and show acceptance", as
   if (!box) return;
 
   await page.getByRole("button", { name: /Target Confirm/i }).click();
-  await page.getByRole("button", { name: /Reset/i }).click();
+  await page.getByRole("button", { name: /Reset Custom/i }).click();
   await page.getByRole("button", { name: "Inject Target" }).click();
   await page.mouse.click(box.x + box.width * 0.05, box.y + box.height * 0.05);
   await expect(page.getByText(/TARGET_FOUND|CONFIRM_TARGET|server_target_found/).first()).toBeVisible({ timeout: 10000 });
-  await page.getByRole("spinbutton").fill("40");
+  await page.locator(".inline-control").getByRole("spinbutton").fill("80");
   await page.getByRole("button", { name: /Step N/i }).click();
   await expect(page.getByRole("row", { name: /CONFIRM_TARGET.*completed/ }).first()).toBeVisible({ timeout: 15000 });
 
   await page.getByRole("button", { name: /Dynamic Obstacle/i }).click();
-  await page.getByRole("button", { name: /Reset/i }).click();
+  await page.getByRole("button", { name: /Reset Custom/i }).click();
   await page.getByRole("button", { name: "Add Obstacle" }).click();
   await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.55);
   await page.mouse.down();
@@ -77,10 +77,48 @@ test("simulation console can run demos, export, replay, and show acceptance", as
   await expect(page.getByText(/MAP_UPDATE|server_map_update/).first()).toBeVisible({ timeout: 10000 });
 
   await page.getByRole("button", { name: /UAV Offline \/ Recover/i }).click();
-  await page.getByRole("button", { name: /Reset/i }).click();
+  await page.getByRole("button", { name: /Reset Custom/i }).click();
   await page.getByRole("button", { name: /^Offline$/i }).first().click();
   await expect(page.getByText(/UAV_OFFLINE|OFFLINE/).first()).toBeVisible({ timeout: 10000 });
   await expect(page.getByText(/uav_offline|failed|cancelled/i).first()).toBeVisible({ timeout: 10000 });
   await page.getByRole("button", { name: /^Recover$/i }).first().click();
   await expect(page.getByText(/UAV_RECOVERED|IDLE|SEARCHING/).first()).toBeVisible({ timeout: 10000 });
+});
+
+test("mission draft can add a UAV, reset custom mission, and run it", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/api/sim/reset", {
+    data: {
+      config_path: "config/default.yaml",
+      scenario_path: "config/scenarios/area_search_1uav.yaml",
+      algorithm_version: "adaptive_component_sweep_v1",
+    },
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Mission Draft" })).toBeVisible();
+  const canvas = page.locator("canvas.map-canvas");
+  await expect(canvas).toBeVisible();
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  await page.getByRole("button", { name: /^Add UAV$/i }).first().click();
+  await expect(page.getByText("addUav")).toBeVisible();
+  await canvas.click({ position: { x: box.width * 0.72, y: box.height * 0.42 } });
+  await expect(page.getByText("uav_02").first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Reset Custom/i }).click();
+  await expect(page.getByText(/mission_draft/i)).toBeVisible({ timeout: 10000 });
+  const customState = await (await request.get("http://127.0.0.1:8000/api/sim/state?include_map=true&state_level=full")).json();
+  expect(customState.algorithm_version).toBe("adaptive_component_sweep_v1");
+  expect(customState.uavs.map((uav: { id: string }) => uav.id)).toContain("uav_02");
+  const added = customState.uavs.find((uav: { id: string }) => uav.id === "uav_02");
+  expect(added.position.x).toBeGreaterThan(0);
+  expect(added.position.y).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: /^Start$/i }).click();
+  await page.waitForTimeout(600);
+  await page.getByRole("button", { name: /^Pause$/i }).click();
+  const runningState = await (await request.get("http://127.0.0.1:8000/api/sim/state?include_map=false&state_level=lite")).json();
+  const customUav = runningState.uavs.find((uav: { id: string }) => uav.id === "uav_02");
+  expect(customUav.total_distance_m).toBeGreaterThan(0);
 });

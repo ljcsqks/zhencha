@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { simulationClient } from "../api/client";
-import type { AlgorithmInfo, EventRequest, ExportResponse, ScenarioInfo, SimulationState } from "../types/sim";
+import {
+  addDraftUav,
+  canEditMissionDraft,
+  createMissionDraftFromState,
+  moveDraftUav,
+  removeDraftUav,
+  updateDraftUav,
+} from "../mission/missionDraft";
+import type { AlgorithmInfo, EventRequest, ExportResponse, GridPosition, MissionDraft, ScenarioInfo, SimulationState } from "../types/sim";
 import {
   emptySimulationClientState,
   mergeSimulationState,
@@ -9,7 +17,7 @@ import {
   type SimulationClientState,
 } from "./simulationState";
 
-export type ToolMode = "inspect" | "target" | "addObstacle" | "removeObstacle";
+export type ToolMode = "inspect" | "target" | "addUav" | "addObstacle" | "removeObstacle";
 
 export interface SimulationActions {
   loadScenarios(): Promise<void>;
@@ -23,6 +31,11 @@ export interface SimulationActions {
   injectTarget(x: number, y: number): Promise<void>;
   updateObstacle(operation: "add_obstacle" | "remove_obstacle", x: number, y: number, width: number, height: number): Promise<void>;
   setUavOnlineState(uavId: string, online: boolean): Promise<void>;
+  resetDraftFromState(): void;
+  addDraftUavAt(position: GridPosition): void;
+  moveDraftUavTo(uavId: string, position: GridPosition): void;
+  removeDraftUavById(uavId: string): void;
+  updateDraftUavFields(uavId: string, patch: Partial<MissionDraft["draftUavs"][number]>): void;
 }
 
 export interface UseSimulationResult extends SimulationClientState, SimulationActions {
@@ -46,6 +59,8 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   setShowPlannedPath(value: boolean): void;
   showHistoryPath: boolean;
   setShowHistoryPath(value: boolean): void;
+  showGrid: boolean;
+  setShowGrid(value: boolean): void;
   selectedUavId?: string;
   setSelectedUavId(value: string | undefined): void;
   selectedCommandId?: string;
@@ -54,6 +69,8 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   setAutoFollowLatestUav(value: boolean): void;
   fullMetrics?: Record<string, unknown>;
   exportResult?: ExportResponse;
+  missionDraft: MissionDraft;
+  draftEditable: boolean;
   clearFrontEndLogs(): void;
 }
 
@@ -70,11 +87,15 @@ export function useSimulation(): UseSimulationResult {
   const [showCoverage, setShowCoverage] = useState(true);
   const [showPlannedPath, setShowPlannedPath] = useState(true);
   const [showHistoryPath, setShowHistoryPath] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
   const [selectedUavId, setSelectedUavId] = useState<string | undefined>();
   const [selectedCommandId, setSelectedCommandId] = useState<string | undefined>();
   const [autoFollowLatestUav, setAutoFollowLatestUav] = useState(false);
   const [fullMetrics, setFullMetrics] = useState<Record<string, unknown> | undefined>();
   const [exportResult, setExportResult] = useState<ExportResponse | undefined>();
+  const [missionDraft, setMissionDraft] = useState<MissionDraft>(() => createMissionDraftFromState());
+  const [draftDirty, setDraftDirty] = useState(false);
+  const draftDirtyRef = useRef(false);
   const refreshingRef = useRef(false);
   const currentStateRef = useRef<SimulationState | undefined>(undefined);
   const hasConnectedRef = useRef(false);
@@ -87,6 +108,11 @@ export function useSimulation(): UseSimulationResult {
       setExportResult(undefined);
     }
     setClientState((previous) => mergeSimulationState(previous, state));
+    if (state.map && (!draftDirtyRef.current || (previousRunId && previousRunId !== state.run_id))) {
+      setMissionDraft(createMissionDraftFromState(state));
+      setDraftDirty(false);
+      draftDirtyRef.current = false;
+    }
     if (autoFollowLatestUav && state.uavs.length > 0) {
       setSelectedUavId(state.uavs[state.uavs.length - 1].id);
     }
@@ -213,7 +239,7 @@ export function useSimulation(): UseSimulationResult {
       reset: () =>
         runRequest(async () => {
           const scenarioPath = selectedScenario || scenarios[0]?.path || "config/scenarios/area_search_1uav.yaml";
-          return simulationClient.resetSimulation("config/default.yaml", scenarioPath, selectedAlgorithmVersion);
+          return simulationClient.resetCustomSimulation("config/default.yaml", scenarioPath, missionDraft, selectedAlgorithmVersion);
         }),
       step: (steps = 1) => runRequest(async () => simulationClient.stepSimulation(steps)),
       start: (intervalMs = 100) => runRequest(async () => simulationClient.startSimulation(intervalMs)),
@@ -246,6 +272,35 @@ export function useSimulation(): UseSimulationResult {
           source_uav_id: uavId,
           data: {},
         }),
+      resetDraftFromState: () => {
+        setMissionDraft(createMissionDraftFromState(currentStateRef.current));
+        setDraftDirty(false);
+        draftDirtyRef.current = false;
+      },
+      addDraftUavAt: (position) => {
+        if (!canEditMissionDraft(currentStateRef.current)) return;
+        setMissionDraft((current) => addDraftUav(current, position));
+        setDraftDirty(true);
+        draftDirtyRef.current = true;
+      },
+      moveDraftUavTo: (uavId, position) => {
+        if (!canEditMissionDraft(currentStateRef.current)) return;
+        setMissionDraft((current) => moveDraftUav(current, uavId, position));
+        setDraftDirty(true);
+        draftDirtyRef.current = true;
+      },
+      removeDraftUavById: (uavId) => {
+        if (!canEditMissionDraft(currentStateRef.current)) return;
+        setMissionDraft((current) => removeDraftUav(current, uavId));
+        setDraftDirty(true);
+        draftDirtyRef.current = true;
+      },
+      updateDraftUavFields: (uavId, patch) => {
+        if (!canEditMissionDraft(currentStateRef.current)) return;
+        setMissionDraft((current) => updateDraftUav(current, uavId, patch));
+        setDraftDirty(true);
+        draftDirtyRef.current = true;
+      },
     }),
     [
       exportRun,
@@ -257,6 +312,7 @@ export function useSimulation(): UseSimulationResult {
       scenarios,
       selectedAlgorithmVersion,
       selectedScenario,
+      missionDraft,
     ],
   );
 
@@ -282,6 +338,8 @@ export function useSimulation(): UseSimulationResult {
     setShowPlannedPath,
     showHistoryPath,
     setShowHistoryPath,
+    showGrid,
+    setShowGrid,
     selectedUavId,
     setSelectedUavId,
     selectedCommandId,
@@ -290,6 +348,8 @@ export function useSimulation(): UseSimulationResult {
     setAutoFollowLatestUav,
     fullMetrics,
     exportResult,
+    missionDraft,
+    draftEditable: canEditMissionDraft(clientState.currentState),
     clearFrontEndLogs: () =>
       setClientState((previous) => ({
         ...previous,

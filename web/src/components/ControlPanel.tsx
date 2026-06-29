@@ -24,7 +24,7 @@ export function ControlPanel({ sim }: Props) {
         </select>
       </label>
       <label className="field">
-        <span>Algorithm · R&D compare</span>
+        <span>Algorithm / R&D compare</span>
         <select
           value={sim.selectedAlgorithmVersion || ""}
           onChange={(event) => sim.setSelectedAlgorithmVersion(event.target.value)}
@@ -51,7 +51,7 @@ export function ControlPanel({ sim }: Props) {
 
       <div className="button-grid">
         <button onClick={sim.reset}>
-          <RotateCcw size={15} /> Reset
+          <RotateCcw size={15} /> Reset Custom
         </button>
         <button onClick={() => sim.step(1)}>
           <SkipForward size={15} /> Step 1

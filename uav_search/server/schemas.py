@@ -2,13 +2,61 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class GridPositionModel(BaseModel):
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+
+
+class DraftRectangle(BaseModel):
+    id: str | None = None
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+
+class DraftPriorityRegion(DraftRectangle):
+    priority: float = Field(default=3.0, gt=0)
+
+
+class DraftMapConfig(BaseModel):
+    width_cells: int | None = Field(default=None, ge=1)
+    height_cells: int | None = Field(default=None, ge=1)
+    width_m: float | None = Field(default=None, gt=0)
+    height_m: float | None = Field(default=None, gt=0)
+    resolution_m: float = Field(default=10.0, gt=0)
+
+
+class DraftUav(BaseModel):
+    id: str | None = None
+    home_position: GridPositionModel
+    initial_position: GridPositionModel | None = None
+    sensor_radius_cells: int = Field(default=2, ge=1)
+    speed_mps: float = Field(default=10.0, gt=0)
+    battery: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class MissionDraft(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    draft_uavs: list[DraftUav] = Field(default_factory=list, alias="draftUavs")
+    draft_obstacles: list[DraftRectangle] = Field(default_factory=list, alias="draftObstacles")
+    draft_search_region: DraftRectangle | None = Field(default=None, alias="draftSearchRegion")
+    draft_priority_regions: list[DraftPriorityRegion] = Field(default_factory=list, alias="draftPriorityRegions")
+    draft_map_config: DraftMapConfig | None = Field(default=None, alias="draftMapConfig")
 
 
 class ResetRequest(BaseModel):
     config_path: str = "config/default.yaml"
     scenario_path: str = "config/scenarios/area_search_1uav.yaml"
     algorithm_version: str | None = None
+
+
+class ResetCustomRequest(ResetRequest):
+    mission: MissionDraft = Field(default_factory=MissionDraft)
 
 
 class StepRequest(BaseModel):

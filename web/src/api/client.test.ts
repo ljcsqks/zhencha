@@ -31,6 +31,48 @@ describe("simulation API client", () => {
     );
   });
 
+  it("posts mission draft reset requests to reset_custom", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ run_id: "run_custom", map: {} }),
+    });
+    const client = createSimulationClient({
+      baseUrl: "http://backend.test",
+      fetchImpl: fetchMock,
+    });
+    const mission = {
+      draftUavs: [
+        {
+          id: "uav_01",
+          home_position: { x: 4, y: 5 },
+          initial_position: { x: 4, y: 5 },
+          sensor_radius_cells: 3,
+          speed_mps: 11,
+          battery: 0.8,
+        },
+      ],
+      draftObstacles: [],
+      draftSearchRegion: { x: 0, y: 0, width: 50, height: 50 },
+      draftPriorityRegions: [],
+      draftMapConfig: { width_cells: 50, height_cells: 50, resolution_m: 10 },
+    };
+
+    await client.resetCustomSimulation("config/default.yaml", "config/scenarios/area_search_1uav.yaml", mission, "adaptive_component_sweep_v1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://backend.test/api/sim/reset_custom",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          config_path: "config/default.yaml",
+          scenario_path: "config/scenarios/area_search_1uav.yaml",
+          algorithm_version: "adaptive_component_sweep_v1",
+          mission,
+        }),
+      }),
+    );
+  });
+
   it("fetches algorithm metadata", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

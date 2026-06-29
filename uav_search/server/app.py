@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 
 from uav_search.server.runtime import SimulationRuntime
-from uav_search.server.schemas import EventRequest, ResetRequest, StartRequest, StepRequest
+from uav_search.server.schemas import EventRequest, ResetCustomRequest, ResetRequest, StartRequest, StepRequest
 
 
 class WebSocketManager:
@@ -65,6 +65,32 @@ def algorithms() -> dict[str, Any]:
 @app.post("/api/sim/reset")
 async def reset(request: ResetRequest) -> dict[str, Any]:
     state = _call_runtime(runtime.reset, request.config_path, request.scenario_path, request.algorithm_version)
+    await ws_manager.broadcast(state)
+    return state
+
+
+@app.post("/api/sim/reset_custom")
+async def reset_custom(request: ResetCustomRequest) -> dict[str, Any]:
+    state = _call_runtime(
+        runtime.reset_custom,
+        request.config_path,
+        request.scenario_path,
+        request.mission,
+        request.algorithm_version,
+    )
+    await ws_manager.broadcast(state)
+    return state
+
+
+@app.post("/api/sim/reset_with_mission")
+async def reset_with_mission(request: ResetCustomRequest) -> dict[str, Any]:
+    state = _call_runtime(
+        runtime.reset_custom,
+        request.config_path,
+        request.scenario_path,
+        request.mission,
+        request.algorithm_version,
+    )
     await ws_manager.broadcast(state)
     return state
 

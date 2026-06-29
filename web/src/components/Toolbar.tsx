@@ -1,4 +1,4 @@
-import { Crosshair, Eye, Eraser, History, Map, Route, ShieldPlus } from "lucide-react";
+import { Crosshair, Eye, Eraser, Grid3X3, History, Map, Plane, Route, ShieldPlus } from "lucide-react";
 import type { ToolMode, UseSimulationResult } from "../hooks/useSimulation";
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
 const modes: Array<{ id: ToolMode; label: string; icon: typeof Eye }> = [
   { id: "inspect", label: "Inspect", icon: Eye },
   { id: "target", label: "Inject Target", icon: Crosshair },
+  { id: "addUav", label: "Add UAV", icon: Plane },
   { id: "addObstacle", label: "Add Obstacle", icon: ShieldPlus },
   { id: "removeObstacle", label: "Remove Obstacle", icon: Eraser },
 ];
@@ -37,6 +38,10 @@ export function Toolbar({ sim }: Props) {
         <label>
           <input type="checkbox" checked={sim.showCoverage} onChange={(event) => sim.setShowCoverage(event.target.checked)} />
           <Map size={15} /> Coverage
+        </label>
+        <label>
+          <input type="checkbox" checked={sim.showGrid} onChange={(event) => sim.setShowGrid(event.target.checked)} />
+          <Grid3X3 size={15} /> Grid
         </label>
         <label>
           <input

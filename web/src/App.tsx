@@ -7,6 +7,7 @@ import { DemoPanel } from "./components/DemoPanel";
 import { EventLog } from "./components/EventLog";
 import { MapCanvas } from "./components/MapCanvas";
 import { MetricsPanel } from "./components/MetricsPanel";
+import { MissionDraftPanel } from "./components/MissionDraftPanel";
 import { ReplayPanel } from "./components/ReplayPanel";
 import { TaskTargetPanel } from "./components/TaskTargetPanel";
 import { Toolbar } from "./components/Toolbar";
@@ -78,6 +79,7 @@ export function App() {
           {!replayActive && (
             <>
               <DemoPanel sim={sim} />
+              <MissionDraftPanel sim={sim} />
               <ControlPanel sim={sim} />
               <Toolbar sim={sim} />
             </>

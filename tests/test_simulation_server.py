@@ -89,6 +89,69 @@ def test_reset_can_override_algorithm_without_modifying_default_config() -> None
     assert default_config.read_text(encoding="utf-8") == before
 
 
+def test_reset_custom_applies_mission_draft_without_modifying_default_config() -> None:
+    client = TestClient(app)
+    default_config = Path("config/default.yaml")
+    before = default_config.read_text(encoding="utf-8")
+
+    response = client.post(
+        "/api/sim/reset_custom",
+        json={
+            "config_path": "config/default.yaml",
+            "scenario_path": "config/scenarios/area_search_1uav.yaml",
+            "algorithm_version": "adaptive_component_sweep_v1",
+            "mission": {
+                "draftMapConfig": {"width_cells": 30, "height_cells": 20, "resolution_m": 10},
+                "draftSearchRegion": {"x": 0, "y": 0, "width": 30, "height": 20},
+                "draftObstacles": [
+                    {"id": "draft_block", "x": 5, "y": 6, "width": 3, "height": 2},
+                ],
+                "draftPriorityRegions": [
+                    {"id": "draft_hot", "x": 12, "y": 8, "width": 4, "height": 3, "priority": 4.0},
+                ],
+                "draftUavs": [
+                    {
+                        "id": "uav_custom_01",
+                        "home_position": {"x": 2, "y": 3},
+                        "initial_position": {"x": 2, "y": 3},
+                        "sensor_radius_cells": 4,
+                        "speed_mps": 12.5,
+                        "battery": 0.75,
+                    },
+                    {
+                        "id": "uav_custom_02",
+                        "home_position": {"x": 1, "y": 18},
+                        "initial_position": {"x": 1, "y": 18},
+                        "sensor_radius_cells": 3,
+                        "speed_mps": 9.0,
+                        "battery": 0.9,
+                    },
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    state = response.json()
+    assert state["scenario_name"] == "mission_draft"
+    assert state["algorithm_version"] == "adaptive_component_sweep_v1"
+    assert state["map"]["width_cells"] == 30
+    assert state["map"]["height_cells"] == 20
+    assert state["map"]["passable"][6][5] is False
+    assert state["map"]["search_priority"][8][12] == 4.0
+    assert [uav["id"] for uav in state["uavs"]] == ["uav_custom_01", "uav_custom_02"]
+    assert state["uavs"][0]["position"] == {"x": 2, "y": 3}
+    assert state["uavs"][0]["home_position"] == {"x": 2, "y": 3}
+    assert state["uavs"][0]["sensor_radius_cells"] == 4
+    assert state["uavs"][0]["speed_mps"] == 12.5
+    assert state["uavs"][0]["battery"] == 0.75
+    assert default_config.read_text(encoding="utf-8") == before
+
+    stepped = client.post("/api/sim/step", json={"steps": 1}).json()
+    command_uavs = {command["uav_id"] for command in stepped["commands"] if command["uav_id"]}
+    assert command_uavs & {"uav_custom_01", "uav_custom_02"}
+
+
 def test_reset_rejects_unknown_algorithm_version() -> None:
     client = TestClient(app)
 

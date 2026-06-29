@@ -3,6 +3,7 @@ import type {
   EventRequest,
   EventResponse,
   ExportResponse,
+  MissionDraft,
   ScenarioListResponse,
   SimulationState,
   StateLevel,
@@ -22,6 +23,7 @@ export interface SimulationClient {
   getScenarios(): Promise<ScenarioListResponse>;
   getAlgorithms(): Promise<AlgorithmListResponse>;
   resetSimulation(configPath: string, scenarioPath: string, algorithmVersion?: string): Promise<SimulationState>;
+  resetCustomSimulation(configPath: string, scenarioPath: string, mission: MissionDraft, algorithmVersion?: string): Promise<SimulationState>;
   stepSimulation(steps: number): Promise<SimulationState>;
   startSimulation(tickIntervalMs: number): Promise<SimulationState>;
   pauseSimulation(): Promise<SimulationState>;
@@ -74,6 +76,16 @@ export function createSimulationClient(options: ClientOptions = {}): SimulationC
           config_path: configPath,
           scenario_path: scenarioPath,
           ...(algorithmVersion ? { algorithm_version: algorithmVersion } : {}),
+        }),
+      }),
+    resetCustomSimulation: (configPath, scenarioPath, mission, algorithmVersion) =>
+      request<SimulationState>("/api/sim/reset_custom", {
+        method: "POST",
+        body: JSON.stringify({
+          config_path: configPath,
+          scenario_path: scenarioPath,
+          ...(algorithmVersion ? { algorithm_version: algorithmVersion } : {}),
+          mission,
         }),
       }),
     stepSimulation: (steps) =>

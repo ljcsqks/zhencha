@@ -72,10 +72,10 @@ class FleetManager:
                 state = UAVState(
                     id=str(item["id"]),
                     position=initial,
-                    velocity_mps=float(uav_config["max_speed_mps"]),
+                    velocity_mps=float(item.get("speed_mps", uav_config["max_speed_mps"])),
                     heading_deg=0.0,
                     battery=float(item.get("battery", 1.0)),
-                    sensor_radius_cells=int(uav_config["sensor_radius_cells"]),
+                    sensor_radius_cells=int(item.get("sensor_radius_cells", uav_config["sensor_radius_cells"])),
                     status=UAVStatus.IDLE,
                     home_position=home,
                 )

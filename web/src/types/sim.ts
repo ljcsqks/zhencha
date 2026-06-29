@@ -21,10 +21,47 @@ export interface UavState {
   position: GridPosition;
   status: string;
   battery: number;
+  home_position?: GridPosition;
   sensor_radius_cells?: number;
+  speed_mps?: number;
   task_id?: string | null;
   total_distance_m?: number;
   effective_search_distance_m?: number;
+}
+
+export interface DraftRectangle {
+  id?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DraftPriorityRegion extends DraftRectangle {
+  priority: number;
+}
+
+export interface DraftMapConfig {
+  width_cells: number;
+  height_cells: number;
+  resolution_m: number;
+}
+
+export interface DraftUav {
+  id: string;
+  home_position: GridPosition;
+  initial_position: GridPosition;
+  sensor_radius_cells: number;
+  speed_mps: number;
+  battery: number;
+}
+
+export interface MissionDraft {
+  draftUavs: DraftUav[];
+  draftObstacles: DraftRectangle[];
+  draftSearchRegion: DraftRectangle | null;
+  draftPriorityRegions: DraftPriorityRegion[];
+  draftMapConfig: DraftMapConfig | null;
 }
 
 export interface ControlCommandSnapshot {
