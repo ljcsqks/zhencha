@@ -1,0 +1,28 @@
+{
+  "baseline_version": "baseline_sparse_boustrophedon",
+  "candidate_version": "adaptive_component_sweep_v1",
+  "scenarios": {
+    "clustered_launch_3uav_open": {
+      "final_coverage_delta": 0.00040000000000006697,
+      "time_to_95_delta_pct": 0.009009009009009009,
+      "total_distance_delta_pct": 0.011798946177873977,
+      "redundant_coverage_delta_pct": 0.08209193550946568,
+      "post_95_extra_distance_delta_pct": 0.0,
+      "post_95_search_distance_delta_pct": 0.0,
+      "workload_balance_delta": 0.001791270177111448,
+      "workload_balance_active_delta": 0.001791270177111448,
+      "segment_count_delta": 2.0,
+      "unique_segment_count_delta": 2.0,
+      "segment_workload_balance_delta": 0.0,
+      "turn_rate_delta": -4.921253488464599e-05,
+      "no_fly_violations_delta": 0.0,
+      "confirm_success_rate_delta": 0.0,
+      "interrupted_task_resume_rate_delta": 0.0,
+      "post_95_extra_distance_delta_abs": 0.0,
+      "post_95_search_distance_delta_abs": 0.0,
+      "supplemental_task_count_delta_abs": 0.0,
+      "task_route_not_found_delta_abs": 0.0,
+      "command_rejected_count_delta_abs": 0.0
+    }
+  }
+}

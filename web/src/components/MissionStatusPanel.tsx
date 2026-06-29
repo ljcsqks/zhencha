@@ -12,12 +12,15 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
   const started = Boolean(state && (state.tick > 0 || state.running || state.global_coverage > 0 || commandLog.length > 0));
   const statusCounts = countUavStatus(state);
   const scheduler = nestedRecord(state?.diagnostics || {}, ["scheduler"]);
+  const segment = nestedRecord(state?.metrics?.diagnostics as Record<string, unknown> | undefined || {}, ["segment_quality"]);
   const rejectedCount = commandLog.filter((entry) => ["rejected", "failed"].includes(String(entry.ack_status || ""))).length;
   const noFlyViolations = numberMetric(state?.metrics?.no_fly_violations);
   const confirmRate = numberMetric(state?.metrics?.confirm_success_rate);
   const targetCount = Object.keys(state?.targets || {}).length + numberMetric(state?.metrics?.target_found_count);
   const assistCreated = numberMetric(scheduler.idle_assist_created_tasks);
   const assistAccepted = numberMetric(scheduler.idle_assist_accepted_tasks);
+  const clusteredLaunch = booleanMetric(segment.clustered_launch_detected);
+  const dynamicRepairs = numberMetric(scheduler.dynamic_route_repair_success);
 
   return (
     <section className="panel mission-status-panel">
@@ -62,9 +65,11 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
           icon={targetCount > 0 && confirmRate >= 1 ? <CheckCircle2 size={15} /> : undefined}
         />
         <StatusRow label="Algorithm" value={state?.algorithm_version || "-"} mono />
+        <StatusRow label="Cooperative sectors" value={clusteredLaunch ? "Enabled" : "Not active"} tone={clusteredLaunch ? "ok" : undefined} />
         {(assistCreated > 0 || assistAccepted > 0) && (
           <StatusRow label="Idle assist" value={`${assistAccepted}/${assistCreated} accepted`} tone="ok" />
         )}
+        {dynamicRepairs > 0 && <StatusRow label="Dynamic replans" value={String(dynamicRepairs)} tone="ok" />}
       </dl>
     </section>
   );
@@ -133,7 +138,11 @@ function numberMetric(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function nestedRecord(payload: Record<string, unknown>, path: string[]): Record<string, unknown> {
+function booleanMetric(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+function nestedRecord(payload: Record<string, unknown> | undefined, path: string[]): Record<string, unknown> {
   let current: unknown = payload;
   for (const key of path) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {

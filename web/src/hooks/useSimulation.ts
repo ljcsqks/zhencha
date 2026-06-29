@@ -12,6 +12,7 @@ import type { AlgorithmInfo, EventRequest, ExportResponse, GridPosition, Mission
 import {
   emptySimulationClientState,
   mergeSimulationState,
+  shouldRefreshFullStateAfterEvent,
   shouldStepAfterEvent,
   type CommandLogEntry,
   type SimulationClientState,
@@ -71,6 +72,7 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   exportResult?: ExportResponse;
   missionDraft: MissionDraft;
   draftEditable: boolean;
+  busy: boolean;
   clearFrontEndLogs(): void;
 }
 
@@ -95,10 +97,24 @@ export function useSimulation(): UseSimulationResult {
   const [exportResult, setExportResult] = useState<ExportResponse | undefined>();
   const [missionDraft, setMissionDraft] = useState<MissionDraft>(() => createMissionDraftFromState());
   const [draftDirty, setDraftDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
   const draftDirtyRef = useRef(false);
   const refreshingRef = useRef(false);
   const currentStateRef = useRef<SimulationState | undefined>(undefined);
   const hasConnectedRef = useRef(false);
+  const inFlightCountRef = useRef(0);
+
+  const beginRequest = useCallback(() => {
+    inFlightCountRef.current += 1;
+    setBusy(true);
+  }, []);
+
+  const endRequest = useCallback(() => {
+    inFlightCountRef.current = Math.max(0, inFlightCountRef.current - 1);
+    if (inFlightCountRef.current === 0) {
+      setBusy(false);
+    }
+  }, []);
 
   const applyState = useCallback((state: SimulationState) => {
     const previousRunId = currentStateRef.current?.run_id;
@@ -121,6 +137,7 @@ export function useSimulation(): UseSimulationResult {
   const runRequest = useCallback(
     async (request: () => Promise<SimulationState | void>) => {
       try {
+        beginRequest();
         setError(undefined);
         const state = await request();
         if (state) {
@@ -128,9 +145,11 @@ export function useSimulation(): UseSimulationResult {
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        endRequest();
       }
     },
-    [applyState],
+    [applyState, beginRequest, endRequest],
   );
 
   const loadScenarios = useCallback(async () => {
@@ -159,41 +178,50 @@ export function useSimulation(): UseSimulationResult {
 
   const fetchMetrics = useCallback(async () => {
     try {
+      beginRequest();
       setError(undefined);
       setFullMetrics(await simulationClient.getMetrics());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      endRequest();
     }
-  }, []);
+  }, [beginRequest, endRequest]);
 
   const exportRun = useCallback(async () => {
     try {
+      beginRequest();
       setError(undefined);
       setExportResult(await simulationClient.exportRun());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      endRequest();
     }
-  }, []);
+  }, [beginRequest, endRequest]);
 
   const postEventAndStep = useCallback(
     async (event: EventRequest) => {
       try {
+        beginRequest();
         setError(undefined);
         const response = await simulationClient.postEvent(event);
         applyState(response.state);
         if (shouldStepAfterEvent(currentStateRef.current)) {
           const state = await simulationClient.stepSimulation(1);
           applyState(state);
-          if ((state.changed_cells || []).length > 0) {
+          if (shouldRefreshFullStateAfterEvent(event, state)) {
             const full = await simulationClient.getState(true, "full");
             applyState(full);
           }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        endRequest();
       }
     },
-    [applyState],
+    [applyState, beginRequest, endRequest],
   );
 
   useEffect(() => {
@@ -350,6 +378,7 @@ export function useSimulation(): UseSimulationResult {
     exportResult,
     missionDraft,
     draftEditable: canEditMissionDraft(clientState.currentState),
+    busy,
     clearFrontEndLogs: () =>
       setClientState((previous) => ({
         ...previous,
@@ -359,7 +388,7 @@ export function useSimulation(): UseSimulationResult {
         commandOrder: [],
         eventLog: [],
         eventById: {},
-        eventOrder: [],
+      eventOrder: [],
       })),
   };
 }

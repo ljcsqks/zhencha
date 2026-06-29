@@ -54,16 +54,16 @@ export function ControlPanel({ sim, variant = "developer" }: Props) {
       </div>
 
       <div className="button-grid">
-        <button onClick={sim.reset}>
+        <button onClick={sim.reset} disabled={sim.busy}>
           <RotateCcw size={15} /> Reset Custom
         </button>
-        <button onClick={() => sim.step(1)}>
+        <button onClick={() => sim.step(1)} disabled={sim.busy}>
           <SkipForward size={15} /> Step 1
         </button>
-        <button onClick={() => sim.start(100)}>
+        <button onClick={() => sim.start(100)} disabled={sim.busy}>
           <Play size={15} /> Start
         </button>
-        <button onClick={sim.pause}>
+        <button onClick={sim.pause} disabled={sim.busy}>
           <Pause size={15} /> Pause
         </button>
       </div>
@@ -76,22 +76,22 @@ export function ControlPanel({ sim, variant = "developer" }: Props) {
           value={stepCount}
           onChange={(event) => setStepCount(clamp(Number(event.target.value) || 1, 1, 100))}
         />
-        <button onClick={() => sim.step(stepCount)}>
+        <button onClick={() => sim.step(stepCount)} disabled={sim.busy}>
           <SkipForward size={15} /> Step N
         </button>
       </div>
 
       {!operator && (
         <>
-          <button className="wide-button" onClick={sim.refreshFullState}>
+          <button className="wide-button" onClick={sim.refreshFullState} disabled={sim.busy}>
             <RefreshCw size={15} /> Refresh full state
           </button>
-          <button className="wide-button" onClick={sim.fetchMetrics}>
+          <button className="wide-button" onClick={sim.fetchMetrics} disabled={sim.busy}>
             <BarChart3 size={15} /> Fetch metrics
           </button>
         </>
       )}
-      <button className="wide-button" onClick={sim.exportRun}>
+      <button className="wide-button" onClick={sim.exportRun} disabled={sim.busy}>
         <Download size={15} /> Export Run
       </button>
 

@@ -87,6 +87,66 @@ def test_scheduler_replans_invalid_path_after_map_update() -> None:
     assert not grid_map.is_passable(blocked_pos)
 
 
+def test_segment_task_repairs_remaining_route_after_dynamic_obstacle() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    config["algorithm"]["version"] = "segment_sweep_v1"
+    config["algorithm"].setdefault("segment_sweep", {})["dynamic_route_repair_enabled"] = True
+    config["algorithm"]["segment_sweep"]["dynamic_route_repair_min_remaining_waypoints"] = 4
+    config["algorithm"]["segment_sweep"]["dynamic_route_repair_max_connector_m"] = 200
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    state = fleet.get_uav("uav_01").state
+    state.status = UAVStatus.SEARCHING
+    state.current_task_id = "segment_task"
+    state.path = [Position(x, 5) for x in range(10)]
+    state.path_index = 1
+    task = Task(
+        id="segment_task",
+        type=TaskType.SEARCH,
+        priority=1.0,
+        target_cells={Position(x, 5) for x in range(10)},
+        entry_point=Position(0, 5),
+        status=TaskStatus.IN_PROGRESS,
+        assigned_uav_id="uav_01",
+        waypoints=[Position(x, 5) for x in range(10)],
+        coverage_waypoints=[Position(x, 5) for x in range(10)],
+        created_at=0.0,
+        updated_at=0.0,
+        metadata={"planner_version": "segment_sweep_v1"},
+    )
+    scheduler.task_manager.add_tasks([task])
+
+    scheduler.event_manager.emit(
+        Event(
+            id="map_update_segment_repair",
+            type=EventType.MAP_UPDATE,
+            timestamp=1.0,
+            priority=EventPriority.HIGH,
+            data={
+                "operation": "SET_CELL",
+                "position": {"x": 3, "y": 5},
+                "cell_type": "OBSTACLE",
+            },
+        )
+    )
+
+    output = scheduler.regular_cycle(now=1.0)
+
+    repair = [
+        command
+        for command in output.commands
+        if command.command == CommandType.REPLAN and command.reason == "dynamic_obstacle_segment_route_repair"
+    ]
+    assert repair
+    assert Position(3, 5) not in repair[0].path
+    assert len(scheduler.task_manager.tasks["segment_task"].coverage_waypoints) >= 4
+    diagnostics = scheduler.diagnostics_snapshot()
+    assert diagnostics["dynamic_route_repair_attempts"] == 1
+    assert diagnostics["dynamic_route_repair_success"] == 1
+    assert diagnostics["dynamic_route_repair_dropped_waypoints"] >= 1
+
+
 def test_scheduler_handles_target_found_event() -> None:
     config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
     grid_map = build_grid_map(config)

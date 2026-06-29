@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mergeSimulationState, shouldStepAfterEvent, type SimulationClientState } from "./simulationState";
+import {
+  mergeSimulationState,
+  shouldRefreshFullStateAfterEvent,
+  shouldStepAfterEvent,
+  type SimulationClientState,
+} from "./simulationState";
 import type { SimulationState } from "../types/sim";
 
 const baseState: SimulationState = {
@@ -218,5 +223,13 @@ describe("mergeSimulationState", () => {
   it("does not request a manual step when injecting events while running", () => {
     expect(shouldStepAfterEvent({ ...baseState, running: true })).toBe(false);
     expect(shouldStepAfterEvent({ ...baseState, running: false })).toBe(true);
+  });
+
+  it("refreshes full state after events that mutate map or UAV availability", () => {
+    expect(shouldRefreshFullStateAfterEvent({ type: "TARGET_FOUND" }, { changed_cells: [] })).toBe(false);
+    expect(shouldRefreshFullStateAfterEvent({ type: "MAP_UPDATE" }, { changed_cells: [] })).toBe(true);
+    expect(shouldRefreshFullStateAfterEvent({ type: "UAV_OFFLINE" }, { changed_cells: [] })).toBe(true);
+    expect(shouldRefreshFullStateAfterEvent({ type: "UAV_RECOVERED" }, { changed_cells: [] })).toBe(true);
+    expect(shouldRefreshFullStateAfterEvent({ type: "TARGET_FOUND" }, { changed_cells: [{ x: 1, y: 1 }] })).toBe(true);
   });
 });

@@ -10,7 +10,7 @@ from uav_search.maps.grid_map import GridMap
 from uav_search.planning.astar import astar_search, path_cost
 from uav_search.planning.reachability import ReachabilityIndex
 from uav_search.planning.reachability import connected_components as reachability_components
-from uav_search.task.task_generator import estimate_task_cost, generate_initial_tasks
+from uav_search.task.task_generator import compute_region_value, estimate_task_cost, generate_boustrophedon_path, generate_initial_tasks
 from uav_search.task.task_generator import reorder_waypoints_for_uav
 
 
@@ -62,6 +62,48 @@ class SweepCluster:
     sweep_cost_m: float
     estimated_internal_connector_cost_m: float
     allowed_uav_ids: set[str]
+
+
+def is_clustered_launch(
+    uav_states: list[UAVState],
+    grid_map: GridMap,
+    *,
+    searchable_cells: set[Position],
+    config: dict | None = None,
+) -> tuple[bool, dict[str, object]]:
+    cfg = config or {}
+    online = [state for state in uav_states if state.status != UAVStatus.OFFLINE]
+    bbox = _uav_bbox(online)
+    diagnostics: dict[str, object] = {
+        "clustered_launch_detected": False,
+        "clustered_launch_uav_count": len(online),
+        "clustered_launch_bbox": bbox,
+        "clustered_launch_reason": "disabled" if not bool(cfg.get("clustered_launch_enabled", True)) else "not_clustered",
+    }
+    if not bool(cfg.get("clustered_launch_enabled", True)):
+        return False, diagnostics
+    if len(online) < 2:
+        diagnostics["clustered_launch_reason"] = "too_few_online_uavs"
+        return False, diagnostics
+    min_cells = int(cfg.get("clustered_launch_min_searchable_cells", 300))
+    if len(searchable_cells) < min_cells:
+        diagnostics["clustered_launch_reason"] = "search_area_too_small"
+        return False, diagnostics
+
+    max_pairwise = max(_manhattan(first.position, second.position) for first in online for second in online)
+    pairwise_limit = int(cfg.get("clustered_launch_max_pairwise_distance_cells", 8))
+    bbox_ratio = float(cfg.get("clustered_launch_bbox_ratio", 0.18))
+    bbox_match = (
+        bbox["width"] <= max(1, math.ceil(grid_map.width_cells * bbox_ratio))
+        and bbox["height"] <= max(1, math.ceil(grid_map.height_cells * bbox_ratio))
+    )
+    pairwise_match = max_pairwise <= pairwise_limit
+    if pairwise_match or bbox_match:
+        diagnostics["clustered_launch_detected"] = True
+        diagnostics["clustered_launch_reason"] = "max_pairwise_distance" if pairwise_match else "bbox_ratio"
+        return True, diagnostics
+    diagnostics["clustered_launch_reason"] = "spread_out"
+    return False, diagnostics
 
 
 class SegmentConnectorCostCache:
@@ -917,37 +959,70 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
             analyses=analyses,
             online=online,
         )
-
+        adaptive_config = self._adaptive_config()
+        clustered_detected, clustered_metadata = is_clustered_launch(
+            online,
+            grid_map,
+            searchable_cells=reachable_cells,
+            config=adaptive_config,
+        )
+        self.last_diagnostics.update(clustered_metadata)
         if simple_cells:
-            simple_tasks = self.baseline.plan_initial_tasks(
-                grid_map=grid_map,
-                uav_states=online,
-                sensor_radius_cells=sensor_radius_cells,
-                created_at=created_at,
-                reachability=reachability,
-                searchable_cells=simple_cells,
-            )
-            frontload_metadata = self._apply_5uav_simple_frontload(
-                simple_tasks,
-                simple_cells=simple_cells,
-                online=online,
-                grid_map=grid_map,
-            )
-            if frontload_metadata.get("simple_frontload_enabled"):
+            if clustered_detected and len(online) >= 2:
+                simple_tasks = self.plan_clustered_launch_sector_tasks(
+                    searchable_cells=simple_cells,
+                    grid_map=grid_map,
+                    uav_states=online,
+                    sensor_radius_cells=sensor_radius_cells,
+                    created_at=created_at,
+                    reachability=reachability,
+                )
+                frontload_metadata = self._apply_5uav_simple_frontload(
+                    [],
+                    simple_cells=simple_cells,
+                    online=online,
+                    grid_map=grid_map,
+                )
                 simple_guardrail_metadata = {
                     **simple_guardrail_metadata,
+                    **clustered_metadata,
+                    **frontload_metadata,
                     "simple_guardrail_triggered_count": 0,
                     "simple_guardrail_component_ids": [],
-                    "chosen_component_planner": {"simple": "frontload_baseline"},
+                    "chosen_component_planner": {"simple": "clustered_launch_sector_sweep"},
                 }
             else:
-                baseline_cost = sum(task.estimated_cost_m for task in simple_tasks)
-                simple_guardrail_metadata = {
-                    **simple_guardrail_metadata,
-                    "baseline_estimated_cost": baseline_cost,
-                    "adaptive_estimated_cost": baseline_cost,
-                    "estimated_connector_cost": sum(task.metadata.get("estimated_connector_cost_m", 0.0) for task in simple_tasks),
-                }
+                simple_tasks = self.baseline.plan_initial_tasks(
+                    grid_map=grid_map,
+                    uav_states=online,
+                    sensor_radius_cells=sensor_radius_cells,
+                    created_at=created_at,
+                    reachability=reachability,
+                    searchable_cells=simple_cells,
+                )
+                frontload_metadata = self._apply_5uav_simple_frontload(
+                    simple_tasks,
+                    simple_cells=simple_cells,
+                    online=online,
+                    grid_map=grid_map,
+                )
+                if frontload_metadata.get("simple_frontload_enabled"):
+                    simple_guardrail_metadata = {
+                        **simple_guardrail_metadata,
+                        **clustered_metadata,
+                        "simple_guardrail_triggered_count": 0,
+                        "simple_guardrail_component_ids": [],
+                        "chosen_component_planner": {"simple": "frontload_baseline"},
+                    }
+                else:
+                    baseline_cost = sum(task.estimated_cost_m for task in simple_tasks)
+                    simple_guardrail_metadata = {
+                        **simple_guardrail_metadata,
+                        **clustered_metadata,
+                        "baseline_estimated_cost": baseline_cost,
+                        "adaptive_estimated_cost": baseline_cost,
+                        "estimated_connector_cost": sum(task.metadata.get("estimated_connector_cost_m", 0.0) for task in simple_tasks),
+                    }
             self.last_diagnostics.update(simple_guardrail_metadata)
             for task in simple_tasks:
                 self._mark_adaptive_task(
@@ -958,7 +1033,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                     target_cells=reachable_cells,
                     sensor_radius_cells=sensor_radius_cells,
                     grid_map=grid_map,
-                    extra_metadata=frontload_metadata,
+                    extra_metadata={**clustered_metadata, **frontload_metadata},
                 )
             tasks.extend(simple_tasks)
 
@@ -1068,6 +1143,99 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 grid_map=grid_map,
             )
         return task
+
+    def plan_clustered_launch_sector_tasks(
+        self,
+        *,
+        searchable_cells: set[Position],
+        grid_map: GridMap,
+        uav_states: list[UAVState],
+        sensor_radius_cells: int,
+        created_at: float,
+        reachability: ReachabilityIndex,
+    ) -> list[Task]:
+        online = [state for state in uav_states if state.status != UAVStatus.OFFLINE]
+        if not online or not searchable_cells:
+            return []
+        entry_side = _nearest_entry_side(searchable_cells, online)
+        orientation = "horizontal" if entry_side in {"west", "east"} else "vertical"
+        sectors = _build_clustered_sectors(searchable_cells, len(online), orientation)
+        tasks: list[Task] = []
+        costs: dict[str, float] = {}
+        cells_per_uav: dict[str, int] = {}
+        assigned: set[str] = set()
+        launch_center = _centroid([state.position for state in online])
+        for index, sector in enumerate(sectors, start=1):
+            candidates = [state for state in online if state.id not in assigned] or online
+            uav = min(
+                candidates,
+                key=lambda state: (
+                    _sector_entry_cost(state.position, sector, entry_side),
+                    state.id,
+                ),
+            )
+            assigned.add(uav.id)
+            waypoints = generate_boustrophedon_path(sector, sensor_radius_cells)
+            if not waypoints:
+                continue
+            waypoints = _orient_waypoints_from_entry(waypoints, entry_side, launch_center)
+            uncovered_value, priority_value = compute_region_value(sector, grid_map)
+            connector = _manhattan(uav.position, waypoints[0]) * grid_map.resolution_m
+            sweep = estimate_task_cost(waypoints, waypoints[0], grid_map.resolution_m)
+            estimated = connector + sweep
+            costs[uav.id] = estimated
+            cells_per_uav[uav.id] = len(sector)
+            task = Task(
+                id=f"clustered_sector_{index:03d}",
+                type=TaskType.SEARCH,
+                priority=max(grid_map.get_cell(cell).search_priority for cell in sector),
+                target_cells=set(sector),
+                entry_point=waypoints[0],
+                waypoints=waypoints,
+                coverage_waypoints=list(waypoints),
+                estimated_cost_m=estimated,
+                created_at=created_at,
+                updated_at=created_at,
+                uncovered_value=uncovered_value,
+                priority_value=priority_value,
+                score=(uncovered_value + priority_value) / max(estimated, 1.0),
+                allowed_uav_ids={uav.id},
+                metadata={
+                    "planner_version": self.version,
+                    "clustered_launch_sector_task": True,
+                    "clustered_sector_index": index,
+                    "clustered_sector_orientation": orientation,
+                    "clustered_sector_entry_side": entry_side,
+                    "clustered_sector_cells": len(sector),
+                    "estimated_connector_cost_m": connector,
+                    "estimated_sweep_cost_m": sweep,
+                    "coverage_waypoints": _positions_to_dicts(waypoints),
+                },
+            )
+            self._mark_adaptive_task(
+                task,
+                component_ids=["clustered_launch_simple"],
+                simple_count=1,
+                complex_count=0,
+                target_cells=searchable_cells,
+                sensor_radius_cells=sensor_radius_cells,
+                grid_map=grid_map,
+                extra_metadata={"clustered_launch_sector_task": True},
+            )
+            tasks.append(task)
+
+        diagnostics = {
+            "clustered_sector_count": len(tasks),
+            "clustered_sector_orientation": orientation,
+            "clustered_sector_entry_side": entry_side,
+            "clustered_sector_cost_per_uav": costs,
+            "clustered_sector_cells_per_uav": cells_per_uav,
+            "clustered_sector_workload_balance": _workload_balance(list(costs.values())),
+        }
+        self.last_diagnostics.update(diagnostics)
+        for task in tasks:
+            task.metadata.update(diagnostics)
+        return tasks
 
     def _apply_5uav_simple_frontload(
         self,
@@ -1749,6 +1917,121 @@ def simulate_planned_coverage(
             if (cell.x - waypoint.x) ** 2 + (cell.y - waypoint.y) ** 2 <= radius_sq:
                 covered.add(cell)
     return covered
+
+
+def _uav_bbox(uavs: list[UAVState]) -> dict[str, int]:
+    if not uavs:
+        return {"min_x": 0, "min_y": 0, "max_x": 0, "max_y": 0, "width": 0, "height": 0}
+    min_x = min(state.position.x for state in uavs)
+    max_x = max(state.position.x for state in uavs)
+    min_y = min(state.position.y for state in uavs)
+    max_y = max(state.position.y for state in uavs)
+    return {"min_x": min_x, "min_y": min_y, "max_x": max_x, "max_y": max_y, "width": max_x - min_x + 1, "height": max_y - min_y + 1}
+
+
+def _centroid(points: list[Position]) -> Position:
+    if not points:
+        return Position(0, 0)
+    return Position(round(sum(point.x for point in points) / len(points)), round(sum(point.y for point in points) / len(points)))
+
+
+def _nearest_entry_side(cells: set[Position], uavs: list[UAVState]) -> str:
+    min_x = min(cell.x for cell in cells)
+    max_x = max(cell.x for cell in cells)
+    min_y = min(cell.y for cell in cells)
+    max_y = max(cell.y for cell in cells)
+    center = _centroid([state.position for state in uavs])
+    distances = {
+        "west": abs(center.x - min_x),
+        "east": abs(max_x - center.x),
+        "north": abs(center.y - min_y),
+        "south": abs(max_y - center.y),
+    }
+    return min(distances, key=lambda side: (distances[side], {"west": 0, "north": 1, "east": 2, "south": 3}[side]))
+
+
+def _build_clustered_sectors(cells: set[Position], count: int, orientation: str) -> list[set[Position]]:
+    if count <= 1:
+        return [set(cells)]
+    axis_values = sorted({cell.y if orientation == "horizontal" else cell.x for cell in cells})
+    weighted: list[tuple[int, int]] = [
+        (value, sum(1 for cell in cells if (cell.y if orientation == "horizontal" else cell.x) == value))
+        for value in axis_values
+    ]
+    total = sum(weight for _, weight in weighted)
+    target = total / count
+    sectors: list[set[Position]] = []
+    current_values: set[int] = set()
+    current_weight = 0
+    remaining_buckets = count
+    for value, weight in weighted:
+        current_values.add(value)
+        current_weight += weight
+        remaining_values = len([item for item, _ in weighted if item > value])
+        if remaining_buckets > 1 and current_weight >= target and remaining_values >= remaining_buckets - 1:
+            sectors.append(_cells_for_axis_values(cells, current_values, orientation))
+            current_values = set()
+            current_weight = 0
+            remaining_buckets -= 1
+    if current_values:
+        sectors.append(_cells_for_axis_values(cells, current_values, orientation))
+    while len(sectors) < count:
+        largest = max(range(len(sectors)), key=lambda idx: len(sectors[idx]))
+        first, second = _split_sector(sectors.pop(largest), orientation)
+        sectors.insert(largest, second)
+        sectors.insert(largest, first)
+    return sectors[:count]
+
+
+def _cells_for_axis_values(cells: set[Position], values: set[int], orientation: str) -> set[Position]:
+    if orientation == "horizontal":
+        return {cell for cell in cells if cell.y in values}
+    return {cell for cell in cells if cell.x in values}
+
+
+def _split_sector(sector: set[Position], orientation: str) -> tuple[set[Position], set[Position]]:
+    values = sorted({cell.y if orientation == "horizontal" else cell.x for cell in sector})
+    midpoint = max(1, len(values) // 2)
+    first_values = set(values[:midpoint])
+    first = _cells_for_axis_values(sector, first_values, orientation)
+    second = set(sector) - first
+    return first, second or first
+
+
+def _sector_entry_cost(origin: Position, sector: set[Position], entry_side: str) -> int:
+    if not sector:
+        return 0
+    if entry_side == "west":
+        edge = min(cell.x for cell in sector)
+        candidates = [cell for cell in sector if cell.x == edge]
+    elif entry_side == "east":
+        edge = max(cell.x for cell in sector)
+        candidates = [cell for cell in sector if cell.x == edge]
+    elif entry_side == "north":
+        edge = min(cell.y for cell in sector)
+        candidates = [cell for cell in sector if cell.y == edge]
+    else:
+        edge = max(cell.y for cell in sector)
+        candidates = [cell for cell in sector if cell.y == edge]
+    return min(_manhattan(origin, cell) for cell in candidates)
+
+
+def _orient_waypoints_from_entry(waypoints: list[Position], entry_side: str, launch_center: Position) -> list[Position]:
+    if not waypoints:
+        return waypoints
+    first_key = _entry_sort_key(waypoints[0], entry_side, launch_center)
+    last_key = _entry_sort_key(waypoints[-1], entry_side, launch_center)
+    return list(reversed(waypoints)) if last_key < first_key else waypoints
+
+
+def _entry_sort_key(point: Position, entry_side: str, launch_center: Position) -> tuple[int, int]:
+    if entry_side == "west":
+        return (point.x, abs(point.y - launch_center.y))
+    if entry_side == "east":
+        return (-point.x, abs(point.y - launch_center.y))
+    if entry_side == "north":
+        return (point.y, abs(point.x - launch_center.x))
+    return (-point.y, abs(point.x - launch_center.x))
 
 
 def _sample_with_boundaries(values: list[int], step: int) -> list[int]:

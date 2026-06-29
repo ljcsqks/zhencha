@@ -5,11 +5,12 @@ interface Props {
   state?: SimulationState;
   activeCommands: ActiveCommandSnapshot[];
   selectedUavId?: string;
+  busy?: boolean;
   onSelectUav(uavId: string | undefined): void;
   onSetOnline(uavId: string, online: boolean): Promise<void>;
 }
 
-export function UavPanel({ state, activeCommands, selectedUavId, onSelectUav, onSetOnline }: Props) {
+export function UavPanel({ state, activeCommands, selectedUavId, busy = false, onSelectUav, onSetOnline }: Props) {
   const uavs = state?.uavs || [];
   return (
     <section className="panel">
@@ -39,7 +40,7 @@ export function UavPanel({ state, activeCommands, selectedUavId, onSelectUav, on
                   event.stopPropagation();
                   onSetOnline(uav.id, false);
                 }}
-                disabled={uav.status === "OFFLINE"}
+                disabled={busy || uav.status === "OFFLINE"}
               >
                 <Power size={14} /> Offline
               </button>
@@ -48,7 +49,7 @@ export function UavPanel({ state, activeCommands, selectedUavId, onSelectUav, on
                   event.stopPropagation();
                   onSetOnline(uav.id, true);
                 }}
-                disabled={uav.status !== "OFFLINE"}
+                disabled={busy || uav.status !== "OFFLINE"}
               >
                 <RotateCw size={14} /> Recover
               </button>

@@ -66,11 +66,11 @@ export function App() {
           </div>
           {operatorMode && !replayActive && (
             <div className="quick-actions" aria-label="Simulation shortcuts">
-              <button onClick={sim.reset} title="Reset custom mission"><RotateCcw size={15} /> Reset</button>
-              <button onClick={() => sim.step(1)} title="Step once"><SkipForward size={15} /> Step</button>
-              <button onClick={() => sim.start(100)} title="Start simulation"><Play size={15} /> Start</button>
-              <button onClick={sim.pause} title="Pause simulation"><Pause size={15} /> Pause</button>
-              <button onClick={sim.exportRun} title="Export run"><Download size={15} /> Export</button>
+              <button onClick={sim.reset} disabled={sim.busy} title="Reset custom mission"><RotateCcw size={15} /> Reset</button>
+              <button onClick={() => sim.step(1)} disabled={sim.busy} title="Step once"><SkipForward size={15} /> Step</button>
+              <button onClick={() => sim.start(100)} disabled={sim.busy} title="Start simulation"><Play size={15} /> Start</button>
+              <button onClick={sim.pause} disabled={sim.busy} title="Pause simulation"><Pause size={15} /> Pause</button>
+              <button onClick={sim.exportRun} disabled={sim.busy} title="Export run"><Download size={15} /> Export</button>
             </div>
           )}
           <div className="status-row">
@@ -120,6 +120,7 @@ export function App() {
                 state={state}
                 activeCommands={state?.active_commands || []}
                 selectedUavId={displaySim.selectedUavId}
+                busy={displaySim.busy}
                 onSelectUav={displaySim.setSelectedUavId}
                 onSetOnline={displaySim.setUavOnlineState}
               />

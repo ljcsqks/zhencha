@@ -1,6 +1,7 @@
 import type {
   CommandAckSnapshot,
   ControlCommandSnapshot,
+  EventRequest,
   EventRecord,
   GridPosition,
   SimulationState,
@@ -77,6 +78,18 @@ export function mergeSimulationState(
 
 export function shouldStepAfterEvent(state?: Pick<SimulationState, "running">): boolean {
   return !state?.running;
+}
+
+export function shouldRefreshFullStateAfterEvent(
+  event: Pick<EventRequest, "type">,
+  state: Pick<SimulationState, "changed_cells">,
+): boolean {
+  return (
+    event.type === "MAP_UPDATE" ||
+    event.type === "UAV_OFFLINE" ||
+    event.type === "UAV_RECOVERED" ||
+    (state.changed_cells || []).length > 0
+  );
 }
 
 function mergeCommands(base: SimulationClientState, incoming: SimulationState) {

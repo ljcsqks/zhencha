@@ -131,6 +131,11 @@ class Scheduler:
             "idle_uav_wait_time_s": 0,
             "idle_assist_cells_reassigned": 0,
             "idle_assist_distance_m": 0,
+            "dynamic_route_repair_attempts": 0,
+            "dynamic_route_repair_success": 0,
+            "dynamic_route_repair_dropped_waypoints": 0,
+            "dynamic_route_repair_replanned_tasks": 0,
+            "dynamic_route_repair_fallback_to_supplemental": 0,
         }
         self._idle_reason_per_uav: dict[str, str] = {}
         self._idle_since_by_uav: dict[str, float] = {}
@@ -1675,6 +1680,10 @@ class Scheduler:
                 continue
 
             if task is not None and task.type == TaskType.SEARCH:
+                repair = self._try_repair_dynamic_segment_route(task, state, event.timestamp)
+                if repair is not None:
+                    commands.append(repair)
+                    continue
                 waypoints = self._task_coverage_waypoints(task)
                 if not waypoints:
                     self.task_manager.complete_task(task.id, now=event.timestamp)
@@ -1724,6 +1733,9 @@ class Scheduler:
             coverage_waypoints = [point for point in self._task_coverage_waypoints(task) if self.grid_map.is_passable(point)]
             if target_cells != task.target_cells or len(coverage_waypoints) != len(task.coverage_waypoints or task.waypoints):
                 changed.add(task.id)
+                if self._is_segment_route_repair_task(task):
+                    previous_count = len(task.coverage_waypoints or task.waypoints)
+                    self._diagnostics["dynamic_route_repair_dropped_waypoints"] += max(0, previous_count - len(coverage_waypoints))
             task.target_cells = target_cells
             self._set_task_coverage_waypoints(task, coverage_waypoints, now)
             self._set_allowed_uavs_for_task(task)
@@ -1737,6 +1749,8 @@ class Scheduler:
         coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
         for task in list(self.task_manager.get_active_tasks()):
             if task.type != TaskType.SEARCH or task.assigned_uav_id is None:
+                continue
+            if self._is_segment_route_repair_task(task):
                 continue
             uav = self.fleet.get_uav(task.assigned_uav_id).state
             remaining_cells = {
@@ -1772,6 +1786,64 @@ class Scheduler:
         if new_tasks:
             self.task_manager.add_tasks(new_tasks)
         return changed
+
+    def _is_segment_route_repair_task(self, task: Task) -> bool:
+        return (
+            bool(self.config.get("algorithm", {}).get("segment_sweep", {}).get("dynamic_route_repair_enabled", True))
+            and task.metadata.get("planner_version") == "segment_sweep_v1"
+            and task.type == TaskType.SEARCH
+        )
+
+    def _try_repair_dynamic_segment_route(self, task: Task, uav: UAVState, now: float) -> DecisionCommand | None:
+        if not self._is_segment_route_repair_task(task):
+            return None
+        self._diagnostics["dynamic_route_repair_attempts"] += 1
+        segment_config = self.config.get("algorithm", {}).get("segment_sweep", {})
+        min_remaining = int(segment_config.get("dynamic_route_repair_min_remaining_waypoints", 4))
+        max_connector_m = float(segment_config.get("dynamic_route_repair_max_connector_m", 200.0))
+        previous = self._task_coverage_waypoints(task)
+        if not previous:
+            self._diagnostics["dynamic_route_repair_fallback_to_supplemental"] += 1
+            return None
+        valid = [
+            point
+            for point in previous
+            if self.grid_map.is_passable(point)
+            and uav.id in self._reachability.reachable_uavs(point)
+        ]
+        dropped = len(previous) - len(valid)
+        self._diagnostics["dynamic_route_repair_dropped_waypoints"] += max(0, dropped)
+        if len(valid) < min_remaining:
+            self._diagnostics["dynamic_route_repair_fallback_to_supplemental"] += 1
+            return None
+        connector_plan = self.planner.plan_path(uav, valid[0], self.grid_map, task_id=task.id)
+        if not connector_plan.valid:
+            self._diagnostics["dynamic_route_repair_fallback_to_supplemental"] += 1
+            return None
+        connector_m = max(0, len(connector_plan.path) - 1) * self.grid_map.resolution_m
+        if connector_m > max_connector_m:
+            self._diagnostics["dynamic_route_repair_fallback_to_supplemental"] += 1
+            return None
+        route = self._plan_route_through_waypoints(uav, valid)
+        if not route:
+            self._diagnostics["dynamic_route_repair_fallback_to_supplemental"] += 1
+            return None
+        self._set_task_coverage_waypoints(task, valid, now)
+        task.target_cells = {cell for cell in task.target_cells if self.grid_map.is_passable(cell)}
+        task.replan_count += 1
+        task.last_replan_time = now
+        self.replan_count += 1
+        self._diagnostics["dynamic_route_repair_success"] += 1
+        self._diagnostics["dynamic_route_repair_replanned_tasks"] += 1
+        return DecisionCommand(
+            uav_id=uav.id,
+            command=CommandType.REPLAN,
+            task_id=task.id,
+            target=valid[-1],
+            path=route,
+            reason="dynamic_obstacle_segment_route_repair",
+            metadata={**self._command_metadata_for_task(task, valid), "status": uav.status.value},
+        )
 
     def _build_search_task_from_region(
         self,

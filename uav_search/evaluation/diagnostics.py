@@ -346,6 +346,16 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
         "low_gain_pre_threshold_cluster_count": 0,
         "far_pre_threshold_cluster_count": 0,
         "threshold_phase_inter_component_jump_count": 0,
+        "clustered_launch_detected": False,
+        "clustered_launch_uav_count": 0,
+        "clustered_launch_bbox": {},
+        "clustered_launch_reason": "",
+        "clustered_sector_count": 0,
+        "clustered_sector_orientation": "",
+        "clustered_sector_entry_side": "",
+        "clustered_sector_cost_per_uav": {},
+        "clustered_sector_cells_per_uav": {},
+        "clustered_sector_workload_balance": 1.0,
     }
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for snapshot in snapshots:
@@ -373,6 +383,9 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
                 elif isinstance(summary[key], list):
                     if isinstance(value, list) and len(value) > len(summary[key]):
                         summary[key] = list(value)
+                elif isinstance(summary[key], str):
+                    if value:
+                        summary[key] = str(value)
                 elif isinstance(summary[key], int):
                     summary[key] = max(summary[key], int(float(value)))
                 else:
@@ -496,6 +509,11 @@ def _scheduler_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "idle_uav_wait_time_s",
         "idle_assist_cells_reassigned",
         "idle_assist_distance_m",
+        "dynamic_route_repair_attempts",
+        "dynamic_route_repair_success",
+        "dynamic_route_repair_dropped_waypoints",
+        "dynamic_route_repair_replanned_tasks",
+        "dynamic_route_repair_fallback_to_supplemental",
     }
     result = {key: 0 for key in keys}
     latest_idle_reasons: dict[str, str] = {}

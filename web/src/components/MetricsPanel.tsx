@@ -53,6 +53,8 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
           <span>frontload {formatMetric(adaptiveDiagnostics.simple_frontload_enabled)}</span>
           <span>planned {formatMetric(adaptiveDiagnostics.fleet_planned_coverage_ratio)}</span>
           <span>gap {formatMetric(adaptiveDiagnostics.planned_actual_gap_abs)}</span>
+          <span>clustered launch {formatMetric(adaptiveDiagnostics.clustered_launch_detected)}</span>
+          <span>sector {formatMetric(adaptiveDiagnostics.clustered_sector_orientation)}</span>
           <span>{formatMetric(adaptiveDiagnostics.planned_vs_actual_explanation)}</span>
         </div>
       )}
@@ -63,6 +65,7 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
         <span>donor replans {formatMetric(schedulerDiagnostics.idle_assist_donor_replans)}</span>
         <span>reassigned cells {formatMetric(schedulerDiagnostics.idle_assist_cells_reassigned)}</span>
         <span>waiting {formatMetric(schedulerDiagnostics.idle_uav_wait_time_s)} s</span>
+        <span>dynamic repairs {formatMetric(schedulerDiagnostics.dynamic_route_repair_success)}</span>
       </div>
     </section>
   );

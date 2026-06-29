@@ -1,0 +1,25 @@
+name: "clustered_launch_3uav_open"
+description: "Three UAVs launch from the same lower-left staging area into an open 500x500 search region."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 620
+
+map_features:
+  obstacles: []
+  no_fly_zones: []
+  priority_zones:
+    - {id: open_priority, shape: rectangle, frame: grid, x: 34, y: 34, width: 8, height: 8, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [0, 0], initial_position: [0, 0], battery: 1.0}
+  - {id: uav_02, home_position: [1, 0], initial_position: [1, 0], battery: 1.0}
+  - {id: uav_03, home_position: [0, 1], initial_position: [0, 1], battery: 1.0}
+
+events: []

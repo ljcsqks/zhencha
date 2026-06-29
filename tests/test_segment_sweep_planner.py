@@ -14,6 +14,7 @@ from uav_search.planning.coverage_planner import (
     SweepCluster,
     SweepSegment,
     create_coverage_planner,
+    is_clustered_launch,
     simulate_planned_coverage,
 )
 from uav_search.planning.reachability import build_reachability_index
@@ -438,7 +439,11 @@ def test_adaptive_5uav_simple_frontload_is_gated_to_large_five_uav_components() 
     assert five_tasks
     assert five_planner.last_diagnostics["simple_frontload_enabled"] is True
     assert len(five_planner.last_diagnostics["frontload_uav_ids"]) == 5
+    assert five_planner.last_diagnostics["clustered_launch_detected"] is True
+    assert five_planner.last_diagnostics["clustered_sector_count"] == 5
+    assert five_planner.last_diagnostics["chosen_component_planner"]["simple"] == "clustered_launch_sector_sweep"
     assert all(task.metadata["simple_frontload_enabled"] is True for task in five_tasks)
+    assert all(task.metadata["clustered_launch_sector_task"] is True for task in five_tasks)
 
     four_uavs = [_uav(f"uav_{idx:02d}", Position(0, idx)) for idx in range(1, 5)]
     four_planner = AdaptiveComponentSweepPlanner(config)
@@ -549,6 +554,78 @@ def test_simple_guardrail_does_not_disable_5uav_frontload() -> None:
     assert tasks
     assert planner.last_diagnostics["simple_frontload_enabled"] is True
     assert planner.last_diagnostics["simple_guardrail_triggered_count"] == 0
+
+
+def test_clustered_launch_detection_records_reason_and_bbox() -> None:
+    grid_map = GridMap(width_m=500, height_m=500, resolution_m=10)
+    uavs = [
+        _uav("uav_01", Position(1, 1)),
+        _uav("uav_02", Position(2, 1)),
+        _uav("uav_03", Position(1, 2)),
+    ]
+
+    detected, diagnostics = is_clustered_launch(
+        uavs,
+        grid_map,
+        searchable_cells=set(grid_map.get_searchable_cells()),
+        config={
+            "clustered_launch_enabled": True,
+            "clustered_launch_max_pairwise_distance_cells": 8,
+            "clustered_launch_bbox_ratio": 0.18,
+            "clustered_launch_min_searchable_cells": 300,
+        },
+    )
+
+    assert detected is True
+    assert diagnostics["clustered_launch_detected"] is True
+    assert diagnostics["clustered_launch_uav_count"] == 3
+    assert diagnostics["clustered_launch_bbox"] == {"min_x": 1, "min_y": 1, "max_x": 2, "max_y": 2, "width": 2, "height": 2}
+    assert diagnostics["clustered_launch_reason"] in {"max_pairwise_distance", "bbox_ratio"}
+
+
+def test_adaptive_clustered_launch_simple_area_uses_sector_tasks() -> None:
+    grid_map = GridMap(width_m=500, height_m=500, resolution_m=10)
+    uavs = [
+        _uav("uav_01", Position(0, 0)),
+        _uav("uav_02", Position(1, 0)),
+        _uav("uav_03", Position(0, 1)),
+    ]
+    planner = AdaptiveComponentSweepPlanner(
+        {
+            "algorithm": {
+                "adaptive_component_sweep": {
+                    "clustered_launch_enabled": True,
+                    "clustered_launch_max_pairwise_distance_cells": 8,
+                    "clustered_launch_bbox_ratio": 0.18,
+                    "clustered_launch_min_searchable_cells": 300,
+                    "clustered_sector_min_cells_ratio": 0.5,
+                    "clustered_sector_balance_iterations": 20,
+                }
+            },
+            "search": {"mission_complete_coverage_threshold": 0.95, "priority_complete_threshold": 0.98},
+        }
+    )
+
+    tasks = planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert len(tasks) == 3
+    assert planner.last_diagnostics["clustered_launch_detected"] is True
+    assert planner.last_diagnostics["clustered_sector_count"] == 3
+    assert planner.last_diagnostics["clustered_sector_entry_side"] in {"west", "north"}
+    assert planner.last_diagnostics["clustered_sector_orientation"] in {"horizontal", "vertical"}
+    assert planner.last_diagnostics["chosen_component_planner"]["simple"] == "clustered_launch_sector_sweep"
+    assert {next(iter(task.allowed_uav_ids or set())) for task in tasks} == {"uav_01", "uav_02", "uav_03"}
+    cells_per_task = [len(task.target_cells) for task in tasks]
+    assert min(cells_per_task) >= (sum(cells_per_task) / len(cells_per_task)) * 0.5
+    assert all(task.metadata["clustered_launch_sector_task"] is True for task in tasks)
+    assert all(task.coverage_waypoints[0].x <= task.coverage_waypoints[-1].x for task in tasks)
 
 
 def test_adaptive_complex_guardrail_falls_back_for_fragmented_but_not_maze() -> None:
