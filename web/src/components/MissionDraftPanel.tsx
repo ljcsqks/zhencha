@@ -72,13 +72,13 @@ export function MissionDraftPanel({ sim }: Props) {
               onChange={(value) => sim.updateDraftUavFields(selectedDraft.id, { speed_mps: value })}
             />
             <NumberField
-              label="battery"
-              value={selectedDraft.battery}
+              label="battery %"
+              value={Math.round(selectedDraft.battery * 100)}
               min={0}
-              max={1}
-              step={0.05}
+              max={100}
+              step={1}
               disabled={!sim.draftEditable}
-              onChange={(value) => sim.updateDraftUavFields(selectedDraft.id, { battery: value })}
+              onChange={(value) => sim.updateDraftUavFields(selectedDraft.id, { battery: value / 100 })}
             />
           </div>
         </div>

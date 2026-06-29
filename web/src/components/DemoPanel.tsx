@@ -7,24 +7,24 @@ interface Props {
 
 const DEMOS: Record<string, { title: string; expected: string; metrics: string }> = {
   demo_search_3uav: {
-    title: "Multi-UAV Search",
-    expected: "Three UAVs split the area, cover priority cells, and avoid restricted cells.",
-    metrics: "Watch global coverage, workload balance, and no-fly violations.",
+    title: "多机搜索 Multi-UAV Search",
+    expected: "三架无人机分区搜索，覆盖重点区域并避开禁飞区。",
+    metrics: "关注覆盖率、负载均衡和禁飞违规。",
   },
   demo_target_confirm: {
-    title: "Target Confirm",
-    expected: "A source-free target event is assigned to a UAV, confirmed, then search resumes.",
-    metrics: "Watch CONFIRM_TARGET acks, confirm success, and resume rate.",
+    title: "目标确认 Target Confirm",
+    expected: "目标事件触发确认任务，确认后恢复搜索。",
+    metrics: "关注确认成功率和任务恢复。",
   },
   demo_dynamic_obstacle: {
-    title: "Dynamic Obstacle",
-    expected: "A MAP_UPDATE adds an obstacle and paths are replanned around changed cells.",
-    metrics: "Watch changed cells, replan count, and no-fly violations.",
+    title: "动态障碍 Dynamic Obstacle",
+    expected: "地图更新后新增障碍，路径绕开变化区域。",
+    metrics: "关注重规划次数、变化格和禁飞违规。",
   },
   demo_uav_offline_recover: {
-    title: "UAV Offline / Recover",
-    expected: "One UAV goes offline, later recovers, and commands avoid offline assignment.",
-    metrics: "Watch UAV status, failed/cancelled acks, and task recovery.",
+    title: "无人机离线/恢复 UAV Offline / Recover",
+    expected: "无人机离线后任务回收，恢复后重新参与任务。",
+    metrics: "关注 UAV 状态、失败命令和任务恢复。",
   },
 };
 
@@ -33,16 +33,16 @@ export function DemoPanel({ sim }: Props) {
   return (
     <section className="panel">
       <div className="panel-heading">
-        <h2>Demos</h2>
+        <h2>预置演示</h2>
         <Clapperboard size={16} />
       </div>
-      <p className="panel-note">算法可在 Control 面板中选择，Reset 后生效。</p>
+      <p className="panel-note">算法可在 Control 面板选择，Reset 后生效。</p>
       <div className="demo-list">
         {demos.map((scenario) => {
           const info = DEMOS[scenario.name] || {
             title: scenario.name,
-            expected: scenario.description || "Demo scenario.",
-            metrics: "Watch mission metrics and logs.",
+            expected: scenario.description || "预置演示场景。",
+            metrics: "关注任务指标和日志。",
           };
           return (
             <button
@@ -57,7 +57,7 @@ export function DemoPanel({ sim }: Props) {
             </button>
           );
         })}
-        {demos.length === 0 && <span className="empty">No demo scenarios found.</span>}
+        {demos.length === 0 && <span className="empty">未找到预置演示。</span>}
       </div>
     </section>
   );

@@ -4,15 +4,17 @@ import type { UseSimulationResult } from "../hooks/useSimulation";
 
 interface Props {
   sim: UseSimulationResult;
+  variant?: "operator" | "developer";
 }
 
-export function ControlPanel({ sim }: Props) {
+export function ControlPanel({ sim, variant = "developer" }: Props) {
   const [stepCount, setStepCount] = useState(10);
   const state = sim.currentState;
+  const operator = variant === "operator";
 
   return (
     <section className="panel">
-      <h2>Control</h2>
+      <h2>{operator ? "Mission Setup" : "Control"}</h2>
       <label className="field">
         <span>Scenario</span>
         <select value={sim.selectedScenario || ""} onChange={(event) => sim.setSelectedScenario(event.target.value)}>
@@ -24,7 +26,7 @@ export function ControlPanel({ sim }: Props) {
         </select>
       </label>
       <label className="field">
-        <span>Algorithm / R&D compare</span>
+        <span>Algorithm</span>
         <select
           value={sim.selectedAlgorithmVersion || ""}
           onChange={(event) => sim.setSelectedAlgorithmVersion(event.target.value)}
@@ -36,10 +38,12 @@ export function ControlPanel({ sim }: Props) {
             </option>
           ))}
         </select>
-        <small className="field-note">
-          {sim.algorithms.find((item) => item.version === sim.selectedAlgorithmVersion)?.description ||
-            "Research comparison only. Reset applies the selected algorithm."}
-        </small>
+        {!operator && (
+          <small className="field-note">
+            {sim.algorithms.find((item) => item.version === sim.selectedAlgorithmVersion)?.description ||
+              "Research comparison only. Reset applies the selected algorithm."}
+          </small>
+        )}
       </label>
       <div className="algorithm-status">
         <span>Current algorithm</span>
@@ -77,12 +81,16 @@ export function ControlPanel({ sim }: Props) {
         </button>
       </div>
 
-      <button className="wide-button" onClick={sim.refreshFullState}>
-        <RefreshCw size={15} /> Refresh full state
-      </button>
-      <button className="wide-button" onClick={sim.fetchMetrics}>
-        <BarChart3 size={15} /> Fetch metrics
-      </button>
+      {!operator && (
+        <>
+          <button className="wide-button" onClick={sim.refreshFullState}>
+            <RefreshCw size={15} /> Refresh full state
+          </button>
+          <button className="wide-button" onClick={sim.fetchMetrics}>
+            <BarChart3 size={15} /> Fetch metrics
+          </button>
+        </>
+      )}
       <button className="wide-button" onClick={sim.exportRun}>
         <Download size={15} /> Export Run
       </button>
@@ -95,24 +103,26 @@ export function ControlPanel({ sim }: Props) {
         </div>
       )}
 
-      <dl className="stat-list">
-        <div>
-          <dt>time_s</dt>
-          <dd>{fmt(state?.time_s)}</dd>
-        </div>
-        <div>
-          <dt>tick</dt>
-          <dd>{state?.tick ?? "-"}</dd>
-        </div>
-        <div>
-          <dt>run_id</dt>
-          <dd className="mono compact">{state?.run_id || "-"}</dd>
-        </div>
-        <div>
-          <dt>running</dt>
-          <dd>{state?.running ? "true" : "false"}</dd>
-        </div>
-      </dl>
+      {!operator && (
+        <dl className="stat-list">
+          <div>
+            <dt>time_s</dt>
+            <dd>{fmt(state?.time_s)}</dd>
+          </div>
+          <div>
+            <dt>tick</dt>
+            <dd>{state?.tick ?? "-"}</dd>
+          </div>
+          <div>
+            <dt>run_id</dt>
+            <dd className="mono compact">{state?.run_id || "-"}</dd>
+          </div>
+          <div>
+            <dt>running</dt>
+            <dd>{state?.running ? "true" : "false"}</dd>
+          </div>
+        </dl>
+      )}
     </section>
   );
 }

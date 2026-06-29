@@ -90,8 +90,9 @@ describe("mission draft helpers", () => {
     expect(removed.draftUavs.map((uav) => uav.id)).toEqual(["uav_01", "uav_02"]);
   });
 
-  it("disables draft editing while a simulation is running", () => {
+  it("only allows draft editing before the mission starts", () => {
     expect(canEditMissionDraft({ ...state, running: false })).toBe(true);
     expect(canEditMissionDraft({ ...state, running: true })).toBe(false);
+    expect(canEditMissionDraft({ ...state, running: false, tick: 1 })).toBe(false);
   });
 });

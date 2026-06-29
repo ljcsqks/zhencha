@@ -21,8 +21,8 @@ export function createMissionDraftFromState(state?: SimulationState): MissionDra
   };
 }
 
-export function canEditMissionDraft(state?: Pick<SimulationState, "running">): boolean {
-  return !state?.running;
+export function canEditMissionDraft(state?: Pick<SimulationState, "running" | "tick">): boolean {
+  return !state?.running && (state?.tick ?? 0) === 0;
 }
 
 export function addDraftUav(draft: MissionDraft, position: GridPosition): MissionDraft {

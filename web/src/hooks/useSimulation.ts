@@ -86,8 +86,8 @@ export function useSimulation(): UseSimulationResult {
   const [toolMode, setToolMode] = useState<ToolMode>("inspect");
   const [showCoverage, setShowCoverage] = useState(true);
   const [showPlannedPath, setShowPlannedPath] = useState(true);
-  const [showHistoryPath, setShowHistoryPath] = useState(true);
-  const [showGrid, setShowGrid] = useState(true);
+  const [showHistoryPath, setShowHistoryPath] = useState(false);
+  const [showGrid, setShowGrid] = useState(false);
   const [selectedUavId, setSelectedUavId] = useState<string | undefined>();
   const [selectedCommandId, setSelectedCommandId] = useState<string | undefined>();
   const [autoFollowLatestUav, setAutoFollowLatestUav] = useState(false);

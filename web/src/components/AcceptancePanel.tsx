@@ -9,6 +9,7 @@ interface Props {
 }
 
 export function AcceptancePanel({ state, commandLog }: Props) {
+  const started = Boolean(state && (state.tick > 0 || state.running || state.global_coverage > 0 || commandLog.length > 0));
   const checks = evaluateAcceptance(state, commandLog);
   return (
     <section className="panel">
@@ -20,8 +21,15 @@ export function AcceptancePanel({ state, commandLog }: Props) {
         <span>Algorithm</span>
         <strong className="mono compact">{state?.algorithm_version || "-"}</strong>
       </div>
+      {!started && (
+        <div className="acceptance-row neutral">
+          <span>Not started</span>
+          <strong>WAIT</strong>
+          <small>Waiting for mission start</small>
+        </div>
+      )}
       <div className="acceptance-list">
-        {checks.map((check) => (
+        {started && checks.map((check) => (
           <div key={check.id} className={`acceptance-row ${check.status.toLowerCase()}`}>
             <span>{check.label}</span>
             <strong>{check.status}</strong>

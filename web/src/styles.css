@@ -67,6 +67,15 @@ input {
   gap: 12px;
 }
 
+.operator-shell {
+  height: 100vh;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.developer-shell {
+  min-height: 100vh;
+}
+
 .topbar,
 .error-strip,
 .panel,
@@ -83,6 +92,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
 }
 
 .brand-block {
@@ -120,6 +130,45 @@ h2 {
   align-items: center;
 }
 
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mode-switch,
+.quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mode-switch {
+  padding: 3px;
+  border: 1px solid #c3cbd3;
+  border-radius: 8px;
+  background: #eef2f4;
+}
+
+.mode-switch button {
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.mode-switch button[aria-pressed="true"] {
+  color: #ffffff;
+  background: #1d5f82;
+  border-color: #1d5f82;
+}
+
+.quick-actions button {
+  min-height: 30px;
+  padding: 0 9px;
+}
+
 .status-pill,
 .mode-chip {
   border: 1px solid #c3cbd3;
@@ -141,6 +190,11 @@ h2 {
 .status-pill.idle {
   border-color: #b9892f;
   background: #fbefcf;
+}
+
+.status-pill.neutral {
+  border-color: #9aa6b2;
+  background: #eef2f4;
 }
 
 .mono {
@@ -170,6 +224,19 @@ h2 {
   grid-template-columns: 330px minmax(620px, 1fr) 360px;
   gap: 12px;
   min-height: 0;
+}
+
+.operator-grid {
+  display: grid;
+  grid-template-columns: 300px minmax(760px, 1fr) 280px;
+  gap: 12px;
+  min-height: 0;
+}
+
+.operator-grid .left-rail,
+.operator-grid .right-rail {
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .panel-stack {
@@ -350,6 +417,15 @@ dd {
   font-size: 12px;
 }
 
+.map-hint {
+  border: 1px solid #1d5f82;
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: #12394e;
+  background: #e2f2f8;
+  font-weight: 650;
+}
+
 .map-canvas {
   width: 100%;
   height: 100%;
@@ -358,6 +434,10 @@ dd {
   background: #e8edf1;
   border-radius: 6px;
   cursor: crosshair;
+}
+
+.operator-shell .map-canvas {
+  min-height: 0;
 }
 
 .map-canvas.add-mode {
@@ -527,6 +607,93 @@ dd {
 .acceptance-row.pass strong { color: #167348; }
 .acceptance-row.warn strong { color: #946200; }
 .acceptance-row.fail strong { color: #b42318; }
+.acceptance-row.neutral strong { color: #4d5964; }
+
+.mission-status-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.mission-waiting {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid #d9e0e6;
+  border-radius: 7px;
+  background: #f6f8fa;
+}
+
+.mission-waiting div {
+  display: grid;
+  gap: 2px;
+}
+
+.mission-waiting span,
+.status-meter span {
+  color: #5d6872;
+}
+
+.status-meter-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.status-meter {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #d9e0e6;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.status-meter div,
+.mission-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.status-meter strong {
+  font-size: 18px;
+}
+
+.status-meter i {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dce3e8;
+}
+
+.status-meter b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #1d789f;
+}
+
+.mission-status-list {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.mission-status-row {
+  padding: 8px 0;
+  border-bottom: 1px solid #e0e6dd;
+}
+
+.mission-status-row dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mission-status-row.ok dd { color: #167348; }
+.mission-status-row.warn dd { color: #946200; }
+.mission-status-row.bad dd { color: #b42318; }
 
 .replay-panel.active {
   border-color: #946200;
@@ -634,6 +801,23 @@ dd {
   gap: 12px;
 }
 
+.diagnostics-drawer {
+  display: grid;
+  gap: 10px;
+}
+
+.drawer-toggle {
+  justify-self: center;
+  min-width: 190px;
+}
+
+.drawer-content {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1.35fr) minmax(320px, 0.75fr);
+  gap: 12px;
+}
+
 .log-panel {
   overflow: hidden;
   display: grid;
@@ -731,9 +915,21 @@ th {
     grid-template-columns: 260px minmax(480px, 1fr);
   }
 
+  .operator-grid {
+    grid-template-columns: 260px minmax(560px, 1fr);
+  }
+
   .right-rail {
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .operator-grid .right-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .drawer-content {
+    grid-template-columns: 1fr;
   }
 }

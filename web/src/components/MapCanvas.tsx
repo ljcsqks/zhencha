@@ -122,7 +122,8 @@ export function MapCanvas({ sim }: Props) {
         </div>
         <div className="map-actions">
           <button onClick={() => setViewport({ scale: 1, offsetX: 0, offsetY: 0 })}>Center view</button>
-          <span className="mode-chip">{sim.toolMode}</span>
+          {sim.toolMode === "addUav" && <span className="map-hint">Click map to place UAV</span>}
+          <span className="mode-chip">{toolModeLabel(sim.toolMode)}</span>
         </div>
       </div>
       <canvas
@@ -164,13 +165,6 @@ export function MapCanvas({ sim }: Props) {
             sim.addDraftUavAt(point);
             return;
           }
-          const draftHit = hitDraftUav(point, sim.missionDraft.draftUavs);
-          if (sim.draftEditable && draftHit) {
-            sim.setSelectedUavId(draftHit.id);
-            pointerRef.current = { mode: "dragUav", startClient: clientPoint(event), uavId: draftHit.id };
-            event.currentTarget.setPointerCapture(event.pointerId);
-            return;
-          }
           if (sim.toolMode === "target") {
             sim.injectTarget(point.x, point.y);
             return;
@@ -179,6 +173,13 @@ export function MapCanvas({ sim }: Props) {
             setDragStart(point);
             setDragEnd(point);
             pointerRef.current = { mode: "selectObstacle", startClient: clientPoint(event) };
+            event.currentTarget.setPointerCapture(event.pointerId);
+            return;
+          }
+          const draftHit = hitDraftUav(point, sim.missionDraft.draftUavs);
+          if (sim.draftEditable && draftHit) {
+            sim.setSelectedUavId(draftHit.id);
+            pointerRef.current = { mode: "dragUav", startClient: clientPoint(event), uavId: draftHit.id };
             event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
@@ -249,7 +250,7 @@ function drawMap(
       ctx.fillStyle = priority > 1 ? "rgba(247, 181, 56, 0.5)" : "#edf1e9";
       ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
       if (showCoverage && (map.coverage_count[y]?.[x] || 0) > 0) {
-        const alpha = Math.min(0.68, 0.16 + (map.coverage_count[y][x] || 0) * 0.07);
+        const alpha = Math.min(0.42, 0.1 + (map.coverage_count[y][x] || 0) * 0.045);
         ctx.fillStyle = `rgba(26, 115, 165, ${alpha})`;
         ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
       }
@@ -259,7 +260,7 @@ function drawMap(
       }
     }
   }
-  if (showGrid && frame.cell >= 6) {
+  if (showGrid && frame.cell >= 12) {
     ctx.strokeStyle = "rgba(32, 39, 45, 0.11)";
     ctx.lineWidth = 1;
     for (let x = 0; x <= map.width_cells; x += 1) {
@@ -293,7 +294,7 @@ function drawTrajectories(
     if (points.length < 2) return;
     ctx.strokeStyle = colorFor(index);
     ctx.lineWidth = selectedUavId === uavId ? 4 : 2;
-    ctx.globalAlpha = selectedUavId && selectedUavId !== uavId ? 0.22 : 0.72;
+    ctx.globalAlpha = selectedUavId && selectedUavId !== uavId ? 0.14 : 0.62;
     drawPolyline(ctx, width, height, map, viewport, points);
     ctx.globalAlpha = 1;
   });
@@ -314,7 +315,7 @@ function drawPlannedPaths(
     ctx.setLineDash([6, 5]);
     const highlighted = selectedCommandId === command.command_id || selectedUavId === command.uav_id;
     ctx.lineWidth = highlighted ? 4 : 1.8;
-    ctx.globalAlpha = selectedCommandId || selectedUavId ? (highlighted ? 0.95 : 0.22) : 0.84;
+    ctx.globalAlpha = selectedCommandId || selectedUavId ? (highlighted ? 0.95 : 0.14) : 0.68;
     drawPolyline(ctx, width, height, map, viewport, "remaining_path" in command ? command.remaining_path || [] : command.path || []);
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
@@ -383,6 +384,8 @@ function drawSelection(ctx: CanvasRenderingContext2D, width: number, height: num
 
 function drawPolyline(ctx: CanvasRenderingContext2D, width: number, height: number, map: SimulationMap, viewport: Viewport, points: GridPosition[]) {
   if (points.length < 2) return;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
   ctx.beginPath();
   points.forEach((point, index) => {
     const screen = cellCenter(map, width, height, viewport, point);
@@ -396,9 +399,17 @@ function drawPolyline(ctx: CanvasRenderingContext2D, width: number, height: numb
 }
 
 function drawUavLabel(ctx: CanvasRenderingContext2D, id: string, x: number, y: number) {
-  ctx.fillStyle = "#111820";
   ctx.font = "700 11px Cascadia Mono, Consolas, monospace";
-  ctx.fillText(id.replace("uav_", ""), x + 8, y - 8);
+  const label = id.replace("uav_", "");
+  const tx = x + 10;
+  const ty = y - 10;
+  const metrics = ctx.measureText(label);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+  ctx.fillRect(tx - 3, ty - 11, metrics.width + 6, 14);
+  ctx.strokeStyle = "rgba(24, 34, 43, 0.18)";
+  ctx.strokeRect(tx - 3, ty - 11, metrics.width + 6, 14);
+  ctx.fillStyle = "#111820";
+  ctx.fillText(label, tx, ty);
 }
 
 function mapFrame(map: SimulationMap, width: number, height: number, viewport: Viewport) {
@@ -485,4 +496,19 @@ function cellInfo(map: SimulationMap, point: GridPosition): string {
   const coverage = map.coverage_count[point.y]?.[point.x] ?? 0;
   const priority = map.search_priority[point.y]?.[point.x] ?? 1;
   return `${passable} / coverage ${coverage} / priority ${priority}`;
+}
+
+function toolModeLabel(mode: UseSimulationResult["toolMode"]): string {
+  switch (mode) {
+    case "addUav":
+      return "Add UAV";
+    case "addObstacle":
+      return "Add obstacle";
+    case "removeObstacle":
+      return "Remove obstacle";
+    case "target":
+      return "Inject target";
+    default:
+      return "Inspect";
+  }
 }
