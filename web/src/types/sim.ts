@@ -27,6 +27,7 @@ export interface UavState {
   task_id?: string | null;
   total_distance_m?: number;
   effective_search_distance_m?: number;
+  idle_reason?: string | null;
 }
 
 export interface DraftRectangle {

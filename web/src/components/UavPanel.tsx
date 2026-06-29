@@ -32,6 +32,7 @@ export function UavPanel({ state, activeCommands, selectedUavId, onSelectUav, on
               <span>battery {formatPct(uav.battery)}</span>
             </div>
             <ActiveCommandLine command={activeCommands.find((item) => item.uav_id === uav.id)} />
+            <IdleAssistLine state={state} uavId={uav.id} status={uav.status} idleReason={uav.idle_reason} />
             <div className="mini-actions">
               <button
                 onClick={(event) => {
@@ -60,6 +61,40 @@ export function UavPanel({ state, activeCommands, selectedUavId, onSelectUav, on
   );
 }
 
+function IdleAssistLine({
+  state,
+  uavId,
+  status,
+  idleReason,
+}: {
+  state?: SimulationState;
+  uavId: string;
+  status: string;
+  idleReason?: string | null;
+}) {
+  const scheduler = nestedRecord(state?.diagnostics || {}, ["scheduler"]);
+  const reasons = nestedRecord(scheduler, ["idle_reason_per_uav"]);
+  const reason = status === "IDLE" ? idleReason || stringValue(reasons[uavId]) : undefined;
+  const assistTasks = (Array.isArray((state?.tasks as Record<string, unknown> | undefined)?.assist_tasks)
+    ? ((state?.tasks as Record<string, unknown>).assist_tasks as unknown[])
+    : []
+  ).filter(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      ((item as Record<string, unknown>).helper_uav_id === uavId || (item as Record<string, unknown>).donor_uav_id === uavId),
+  );
+  if (!reason && assistTasks.length === 0) {
+    return null;
+  }
+  return (
+    <small className="uav-command">
+      {reason ? `Idle: ${formatIdleReason(reason)}` : ""}
+      {assistTasks.length > 0 ? ` assist links ${assistTasks.length}` : ""}
+    </small>
+  );
+}
+
 function ActiveCommandLine({ command }: { command?: ActiveCommandSnapshot }) {
   if (!command) {
     return <small className="uav-command">command -</small>;
@@ -69,6 +104,25 @@ function ActiveCommandLine({ command }: { command?: ActiveCommandSnapshot }) {
       command <span className="mono">{command.command_id}</span> / {command.command} / progress {formatPct(command.progress ?? 0)}
     </small>
   );
+}
+
+function nestedRecord(payload: Record<string, unknown>, path: string[]): Record<string, unknown> {
+  let current: unknown = payload;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return {};
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current && typeof current === "object" && !Array.isArray(current) ? (current as Record<string, unknown>) : {};
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function formatIdleReason(reason: string): string {
+  return reason.replaceAll("_", " ");
 }
 
 function formatPct(value?: number): string {

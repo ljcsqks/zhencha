@@ -296,6 +296,7 @@ class Simulator:
 
         快照用于后续的可视化和分析。
         """
+        scheduler_diagnostics = scheduler.diagnostics_snapshot() if scheduler is not None else {}
         self.snapshots.append(
             {
                 "time_s": self.time_s,
@@ -304,7 +305,7 @@ class Simulator:
                 "replan_count": scheduler.replan_count if scheduler is not None else 0,
                 "target_metrics": scheduler.target_metrics_snapshot() if scheduler is not None else {},
                 "tasks": scheduler.task_status_snapshot() if scheduler is not None else {},
-                "scheduler_diagnostics": scheduler.diagnostics_snapshot() if scheduler is not None else {},
+                "scheduler_diagnostics": scheduler_diagnostics,
                 "commands": [
                     _command_to_snapshot(command)
                     for command in (commands if commands is not None else self._last_commands)
@@ -327,6 +328,7 @@ class Simulator:
                         "task_id": state.current_task_id,
                         "total_distance_m": state.total_distance_m,
                         "effective_search_distance_m": state.effective_search_distance_m,
+                        "idle_reason": (scheduler_diagnostics.get("idle_reason_per_uav", {}) or {}).get(state.id),
                     }
                     for state in self.fleet.get_all_states()
                 ],

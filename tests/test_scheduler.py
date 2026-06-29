@@ -10,11 +10,13 @@ from uav_search.core.data_types import (
     Task,
     TaskStatus,
     TaskType,
+    UAVState,
     UAVStatus,
 )
 from uav_search.core.scheduler import Scheduler
 from uav_search.maps.map_loader import build_grid_map
 from uav_search.simulation.command_applier import CommandApplier
+from uav_search.uav.uav_model import UAV
 from uav_search.uav.fleet_manager import FleetManager
 
 
@@ -544,6 +546,93 @@ def test_idle_uav_takes_nonreserved_search_work() -> None:
             )
             for waypoint in task.waypoints
         )
+
+
+def test_idle_uav_assists_active_search_task_and_donor_replans() -> None:
+    config = load_config("config/default.yaml")
+    config["map"] = {"width_m": 300, "height_m": 120, "resolution_m": 10}
+    config["uav"]["sensor_radius_cells"] = 1
+    config["search"].update(
+        {
+            "idle_assist_enabled": True,
+            "idle_assist_min_remaining_cells": 4,
+            "idle_assist_min_gain_per_meter": 0.0,
+            "idle_assist_max_tasks_per_cycle": 1,
+            "idle_assist_donor_keep_front_waypoints": 2,
+            "idle_assist_replan_donor": True,
+            "min_supplemental_score": 999.0,
+            "max_supplemental_tasks_per_run": 0,
+            "active_replan_min_interval_s": 0.0,
+        }
+    )
+    grid_map = build_grid_map(config)
+    donor = UAVState(
+        id="uav_01",
+        position=Position(0, 5),
+        velocity_mps=10.0,
+        heading_deg=0.0,
+        battery=1.0,
+        sensor_radius_cells=1,
+        status=UAVStatus.SEARCHING,
+        home_position=Position(0, 5),
+        current_task_id="task_donor",
+        path=[Position(x, 5) for x in range(16)],
+        path_index=0,
+        available=False,
+    )
+    helper = UAVState(
+        id="uav_02",
+        position=Position(0, 8),
+        velocity_mps=10.0,
+        heading_deg=0.0,
+        battery=1.0,
+        sensor_radius_cells=1,
+        status=UAVStatus.IDLE,
+        home_position=Position(0, 8),
+        available=True,
+    )
+    fleet = FleetManager([UAV(donor, endurance_s=1000.0), UAV(helper, endurance_s=1000.0)])
+    scheduler = Scheduler(grid_map, fleet, config)
+    scheduler._initialized = True
+    donor_task = Task(
+        id="task_donor",
+        type=TaskType.SEARCH,
+        priority=1.0,
+        target_cells={Position(x, 5) for x in range(16)},
+        entry_point=Position(0, 5),
+        status=TaskStatus.IN_PROGRESS,
+        assigned_uav_id="uav_01",
+        waypoints=[Position(x, 5) for x in range(16)],
+        coverage_waypoints=[Position(x, 5) for x in range(16)],
+        created_at=0.0,
+        updated_at=0.0,
+    )
+    scheduler.task_manager.add_tasks([donor_task])
+
+    output = scheduler.regular_cycle(now=10.0)
+
+    assist_commands = [
+        command
+        for command in output.commands
+        if command.uav_id == "uav_02" and command.command == CommandType.FOLLOW_PATH and command.task_id
+    ]
+    donor_replans = [
+        command
+        for command in output.commands
+        if command.uav_id == "uav_01" and command.command == CommandType.REPLAN and command.reason == "idle_assist_donor_replan"
+    ]
+    assert assist_commands
+    assist_task = scheduler.task_manager.tasks[assist_commands[0].task_id]
+    assert assist_task.metadata["assist_task"] is True
+    assert assist_task.metadata["donor_task_id"] == "task_donor"
+    assert assist_task.metadata["donor_uav_id"] == "uav_01"
+    assert assist_task.metadata["helper_uav_id"] == "uav_02"
+    assert assist_task.allowed_uav_ids == {"uav_02"}
+    assert donor_replans
+    assert len(scheduler.task_manager.tasks["task_donor"].coverage_waypoints) < 16
+    diagnostics = scheduler.diagnostics_snapshot()
+    assert diagnostics["idle_assist_created_tasks"] == 1
+    assert diagnostics["idle_assist_donor_replans"] == 1
 
 
 def test_small_ordinary_fragment_is_ignored_after_coverage_goal() -> None:

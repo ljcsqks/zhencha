@@ -469,6 +469,20 @@ def test_lite_state_includes_active_commands_with_remaining_path() -> None:
     assert active["progress"] is not None
 
 
+def test_state_includes_scheduler_idle_assist_diagnostics() -> None:
+    runtime = SimulationRuntime(
+        config_path="config/default.yaml",
+        scenario_path="config/scenarios/area_search_3uav.yaml",
+    )
+    runtime.step(1)
+
+    state = runtime.get_state(include_map=False, state_level="lite")
+
+    scheduler_diagnostics = state["diagnostics"]["scheduler"]
+    assert "idle_assist_created_tasks" in scheduler_diagnostics
+    assert "idle_reason_per_uav" in scheduler_diagnostics
+
+
 def test_lite_state_uses_lightweight_metrics_without_compute_metrics(monkeypatch) -> None:
     runtime = SimulationRuntime(
         config_path="config/default.yaml",

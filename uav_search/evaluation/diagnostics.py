@@ -487,14 +487,28 @@ def _scheduler_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "post_goal_active_search_cancel_count",
         "skipped_low_gain_supplemental_count",
         "late_stage_supplemental_count",
+        "idle_assist_attempts",
+        "idle_assist_created_tasks",
+        "idle_assist_accepted_tasks",
+        "idle_assist_rejected_low_gain",
+        "idle_assist_rejected_unreachable",
+        "idle_assist_donor_replans",
+        "idle_uav_wait_time_s",
+        "idle_assist_cells_reassigned",
+        "idle_assist_distance_m",
     }
     result = {key: 0 for key in keys}
+    latest_idle_reasons: dict[str, str] = {}
     for snapshot in snapshots:
         diagnostics = snapshot.get("scheduler_diagnostics") or {}
         if not isinstance(diagnostics, dict):
             continue
         for key in keys:
             result[key] = max(result[key], int(diagnostics.get(key, 0) or 0))
+        reasons = diagnostics.get("idle_reason_per_uav", {})
+        if isinstance(reasons, dict) and reasons:
+            latest_idle_reasons = {str(key): str(value) for key, value in reasons.items()}
+    result["idle_reason_per_uav"] = latest_idle_reasons
     return result
 
 

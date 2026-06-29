@@ -26,6 +26,10 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
   const metrics = { ...(state?.metrics || {}), ...(fullMetrics || {}) };
   const algorithmVersion = String(state?.algorithm_version || metrics.algorithm_version || "-");
   const adaptiveDiagnostics = nestedRecord(metrics, ["diagnostics", "segment_quality"]);
+  const schedulerDiagnostics = {
+    ...nestedRecord(state?.diagnostics || {}, ["scheduler"]),
+    ...nestedRecord(metrics, ["diagnostics", "scheduler_quality"]),
+  };
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -52,6 +56,14 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
           <span>{formatMetric(adaptiveDiagnostics.planned_vs_actual_explanation)}</span>
         </div>
       )}
+      <div className="diagnostic-strip">
+        <strong>Idle assist</strong>
+        <span>created {formatMetric(schedulerDiagnostics.idle_assist_created_tasks)}</span>
+        <span>accepted {formatMetric(schedulerDiagnostics.idle_assist_accepted_tasks)}</span>
+        <span>donor replans {formatMetric(schedulerDiagnostics.idle_assist_donor_replans)}</span>
+        <span>reassigned cells {formatMetric(schedulerDiagnostics.idle_assist_cells_reassigned)}</span>
+        <span>waiting {formatMetric(schedulerDiagnostics.idle_uav_wait_time_s)} s</span>
+      </div>
     </section>
   );
 }

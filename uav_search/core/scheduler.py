@@ -122,7 +122,19 @@ class Scheduler:
             "post_goal_active_search_cancel_count": 0,
             "skipped_low_gain_supplemental_count": 0,
             "late_stage_supplemental_count": 0,
+            "idle_assist_attempts": 0,
+            "idle_assist_created_tasks": 0,
+            "idle_assist_accepted_tasks": 0,
+            "idle_assist_rejected_low_gain": 0,
+            "idle_assist_rejected_unreachable": 0,
+            "idle_assist_donor_replans": 0,
+            "idle_uav_wait_time_s": 0,
+            "idle_assist_cells_reassigned": 0,
+            "idle_assist_distance_m": 0,
         }
+        self._idle_reason_per_uav: dict[str, str] = {}
+        self._idle_since_by_uav: dict[str, float] = {}
+        self._assist_task_seq = 0
         self._reachability: ReachabilityIndex = build_reachability_index(self.grid_map, self.fleet.get_all_states())
         self._unreachable_components: list[set[Position]] = reachability_components(
             self.grid_map,
@@ -168,10 +180,22 @@ class Scheduler:
             }
             for task_id, record in sorted(self._confirmations.items())
         ]
-        return {"status_counts": status_counts, "confirmations": confirmations}
+        assist_tasks = [
+            {
+                "task_id": task.id,
+                "status": task.status.value,
+                "donor_task_id": task.metadata.get("donor_task_id"),
+                "donor_uav_id": task.metadata.get("donor_uav_id"),
+                "helper_uav_id": task.metadata.get("helper_uav_id"),
+                "assist_region_cell_count": len(task.metadata.get("assist_region_cells", []) or []),
+            }
+            for task in sorted(self.task_manager.tasks.values(), key=lambda item: item.id)
+            if task.metadata.get("assist_task") is True
+        ]
+        return {"status_counts": status_counts, "confirmations": confirmations, "assist_tasks": assist_tasks}
 
-    def diagnostics_snapshot(self) -> dict[str, int]:
-        return dict(self._diagnostics)
+    def diagnostics_snapshot(self) -> dict[str, Any]:
+        return {**self._diagnostics, "idle_reason_per_uav": dict(self._idle_reason_per_uav)}
 
     def remember_control_commands(self, commands: list[ControlCommand]) -> None:
         for command in commands:
@@ -314,6 +338,7 @@ class Scheduler:
         self._ensure_initial_tasks(now)
         commands.extend(self._refresh_task_progress(now))
         self._ensure_supplemental_search_tasks(now)
+        commands.extend(self._try_assign_idle_assist_tasks(now))
 
         # 步骤3: 执行任务分配
         assignments = []
@@ -365,6 +390,9 @@ class Scheduler:
 
             # 路径规划成功，更新任务和无人机状态
             assignments.append(assignment)
+            self._clear_idle_reason(uav_state.id)
+            if task.metadata.get("assist_task") is True:
+                self._diagnostics["idle_assist_accepted_tasks"] += 1
             commands.append(
                 DecisionCommand(
                     uav_id=uav_state.id,
@@ -648,6 +676,8 @@ class Scheduler:
         ) or (
             bool(self.fleet.get_available_uavs()) and bool(self._get_supplemental_candidates())
         ) or (
+            self._has_idle_assist_opportunity()
+        ) or (
             self._coverage_goal_reached() and self._has_active_search_uavs()
         )
 
@@ -771,6 +801,254 @@ class Scheduler:
                     )
             )
         self.task_manager.add_tasks(tasks)
+
+    def _try_assign_idle_assist_tasks(self, now: float) -> list[DecisionCommand]:
+        if not bool(self.config["search"].get("idle_assist_enabled", True)):
+            return []
+        idle_uavs = [uav for uav in self.fleet.get_available_uavs() if uav.status == UAVStatus.IDLE]
+        if not idle_uavs or self._mission_goal_met():
+            return []
+        pending_count = sum(1 for task in self._allocatable_pending_tasks() if task.type == TaskType.SEARCH)
+        if pending_count >= len(idle_uavs):
+            for uav in idle_uavs:
+                self._set_idle_reason(uav.id, "waiting_for_other_uavs", now)
+            return []
+
+        commands: list[DecisionCommand] = []
+        created = 0
+        for idle_uav in idle_uavs:
+            if created >= int(self.config["search"].get("idle_assist_max_tasks_per_cycle", 2)):
+                break
+            self._diagnostics["idle_assist_attempts"] += 1
+            plan = self._build_idle_assist_plan(idle_uav, now)
+            if plan is None:
+                self._set_idle_reason(idle_uav.id, "no_valuable_assist_region", now)
+                continue
+            assist_task, donor_task, donor_uav, donor_waypoints = plan
+            self.task_manager.add_tasks([assist_task])
+            self._diagnostics["idle_assist_created_tasks"] += 1
+            self._diagnostics["idle_assist_cells_reassigned"] += len(assist_task.target_cells)
+            self._idle_reason_per_uav.pop(idle_uav.id, None)
+            created += 1
+            if bool(self.config["search"].get("idle_assist_replan_donor", True)) and donor_waypoints:
+                self._set_task_coverage_waypoints(donor_task, donor_waypoints, now)
+                donor_route = self._plan_route_through_waypoints(donor_uav, donor_waypoints)
+                if donor_route:
+                    donor_task.last_replan_time = now
+                    donor_task.replan_count += 1
+                    self.replan_count += 1
+                    self._diagnostics["idle_assist_donor_replans"] += 1
+                    commands.append(
+                        DecisionCommand(
+                            uav_id=donor_uav.id,
+                            command=CommandType.REPLAN,
+                            task_id=donor_task.id,
+                            target=donor_waypoints[-1],
+                            path=donor_route,
+                            reason="idle_assist_donor_replan",
+                            metadata={
+                                **self._command_metadata_for_task(donor_task, donor_waypoints),
+                                "status": UAVStatus.SEARCHING.value,
+                                "assist_task_id": assist_task.id,
+                            },
+                        )
+                    )
+        if created == 0 and idle_uavs:
+            for uav in idle_uavs:
+                self._idle_reason_per_uav.setdefault(uav.id, "no_pending_tasks")
+        return commands
+
+    def _build_idle_assist_plan(
+        self,
+        idle_uav: UAVState,
+        now: float,
+    ) -> tuple[Task, Task, UAVState, list[Position]] | None:
+        coverage_threshold = float(self.config["search"].get("coverage_complete_threshold", 0.95))
+        min_remaining = int(self.config["search"].get("idle_assist_min_remaining_cells", 40))
+        min_gain = float(self.config["search"].get("idle_assist_min_gain_per_meter", 0.02))
+        keep_front = max(0, int(self.config["search"].get("idle_assist_donor_keep_front_waypoints", 5)))
+        reserved = self._reserved_search_cells_for_idle_assist()
+        active_tasks = sorted(
+            (
+                task
+                for task in self.task_manager.get_active_tasks()
+                if task.type == TaskType.SEARCH and task.assigned_uav_id is not None and not task.metadata.get("assist_task")
+            ),
+            key=lambda task: (task.updated_at, task.id),
+        )
+        for donor_task in active_tasks:
+            donor_uav = self.fleet.get_uav(donor_task.assigned_uav_id).state
+            if donor_uav.status != UAVStatus.SEARCHING or not donor_uav.path:
+                continue
+            donor_reserved = set(reserved)
+            donor_reserved.difference_update(self._task_remaining_cells_from_path(donor_task, donor_uav, coverage_threshold, keep_front))
+            remaining = self._task_remaining_cells_from_path(donor_task, donor_uav, coverage_threshold, keep_front)
+            remaining = {cell for cell in remaining if cell not in donor_reserved}
+            if len(remaining) < min_remaining:
+                continue
+            component = self._select_assist_component(remaining, idle_uav, min_remaining)
+            if not component:
+                continue
+            if not all(idle_uav.id in self._reachability.reachable_uavs(cell) for cell in component):
+                self._diagnostics["idle_assist_rejected_unreachable"] += 1
+                continue
+            assist_task = self._build_assist_task(component, idle_uav, donor_task, donor_uav, now)
+            if assist_task is None:
+                self._diagnostics["idle_assist_rejected_unreachable"] += 1
+                continue
+            helper_route = self._plan_route_through_waypoints(idle_uav, assist_task.coverage_waypoints)
+            if not helper_route:
+                self._diagnostics["idle_assist_rejected_unreachable"] += 1
+                continue
+            gain_per_meter = len(component) / max(self._route_distance_m(helper_route), 1.0)
+            if gain_per_meter < min_gain:
+                self._diagnostics["idle_assist_rejected_low_gain"] += 1
+                continue
+            assist_task.metadata["gain_per_meter"] = gain_per_meter
+            helper_distance_m = self._route_distance_m(helper_route)
+            assist_task.metadata["estimated_connector_cost_m"] = helper_distance_m
+            assist_task.score = gain_per_meter
+            self._diagnostics["idle_assist_distance_m"] += int(helper_distance_m)
+            donor_waypoints = self._donor_waypoints_after_assist(donor_task, component, donor_uav, keep_front)
+            if donor_waypoints:
+                return assist_task, donor_task, donor_uav, donor_waypoints
+        return None
+
+    def _build_assist_task(
+        self,
+        region: set[Position],
+        idle_uav: UAVState,
+        donor_task: Task,
+        donor_uav: UAVState,
+        now: float,
+    ) -> Task | None:
+        self._assist_task_seq += 1
+        task_id = f"assist_{self._assist_task_seq:03d}"
+        task = self.coverage_planner.plan_region_task(
+            task_id=task_id,
+            region=region,
+            origin=idle_uav.position,
+            grid_map=self.grid_map,
+            sensor_radius_cells=idle_uav.sensor_radius_cells,
+            created_at=now,
+            reachability=self._reachability,
+            allowed_uav_ids={idle_uav.id},
+        )
+        if task is None:
+            return None
+        task.allowed_uav_ids = {idle_uav.id}
+        task.metadata.update(
+            {
+                "assist_task": True,
+                "donor_task_id": donor_task.id,
+                "donor_uav_id": donor_uav.id,
+                "helper_uav_id": idle_uav.id,
+                "assist_region_cells": self._positions_to_dicts(sorted(region)),
+            }
+        )
+        return task
+
+    def _task_remaining_cells_from_path(
+        self,
+        task: Task,
+        uav: UAVState,
+        coverage_threshold: float,
+        skip_front_waypoints: int,
+    ) -> set[Position]:
+        path = uav.path[uav.path_index + skip_front_waypoints :] if uav.path else []
+        cells = self._path_coverage_footprint(path, uav.sensor_radius_cells)
+        return {
+            cell
+            for cell in cells
+            if cell in task.target_cells
+            and self.grid_map.is_passable(cell)
+            and self.grid_map.get_cell(cell).search_confidence < coverage_threshold
+        }
+
+    def _reserved_search_cells_for_idle_assist(self) -> set[Position]:
+        reserved: set[Position] = set()
+        for task in self.task_manager.get_pending_tasks():
+            if task.type == TaskType.SEARCH:
+                reserved.update(task.target_cells)
+        for task in self.task_manager.get_active_tasks():
+            if task.type != TaskType.SEARCH or task.assigned_uav_id is None or task.metadata.get("assist_task"):
+                continue
+            uav = self.fleet.get_uav(task.assigned_uav_id).state
+            if uav.status == UAVStatus.SEARCHING and uav.path:
+                reserved.update(self._path_coverage_footprint(uav.path[uav.path_index :], uav.sensor_radius_cells))
+        return reserved
+
+    def _select_assist_component(
+        self,
+        remaining: set[Position],
+        idle_uav: UAVState,
+        min_cells: int,
+    ) -> set[Position]:
+        components = [component for component in connected_components(remaining, self.grid_map) if len(component) >= min_cells]
+        if not components:
+            return set()
+        component = min(
+            components,
+            key=lambda component: (
+                min(abs(cell.x - idle_uav.position.x) + abs(cell.y - idle_uav.position.y) for cell in component),
+                -len(component),
+            ),
+        )
+        max_cells = max(
+            min_cells,
+            int(
+                self.config["search"].get(
+                    "idle_assist_max_region_cells",
+                    self.config["search"].get(
+                        "supplemental_cluster_max_cells",
+                        self.config["search"].get("supplemental_task_max_cells", 80),
+                    ),
+                )
+            ),
+        )
+        if len(component) <= max_cells:
+            return component
+        seed = min(component, key=lambda cell: abs(cell.x - idle_uav.position.x) + abs(cell.y - idle_uav.position.y))
+        region = self._collect_supplemental_region(seed, set(component), max_cells)
+        return region if len(region) >= min_cells else component
+
+    def _donor_waypoints_after_assist(
+        self,
+        donor_task: Task,
+        assist_region: set[Position],
+        donor_uav: UAVState,
+        keep_front: int,
+    ) -> list[Position]:
+        waypoints = list(donor_uav.path[donor_uav.path_index :]) if donor_uav.path else self._task_coverage_waypoints(donor_task)
+        front = waypoints[:keep_front]
+        radius = donor_uav.sensor_radius_cells
+        kept = [
+            waypoint
+            for index, waypoint in enumerate(waypoints)
+            if index < keep_front or not self._point_intersects_cells(waypoint, radius, assist_region)
+        ]
+        if not kept:
+            return front
+        return kept
+
+    def _set_idle_reason(self, uav_id: str, reason: str, now: float) -> None:
+        self._idle_reason_per_uav[uav_id] = reason
+        started_at = self._idle_since_by_uav.setdefault(uav_id, now)
+        self._diagnostics["idle_uav_wait_time_s"] = int(
+            max(float(self._diagnostics.get("idle_uav_wait_time_s", 0)), now - started_at)
+        )
+
+    def _clear_idle_reason(self, uav_id: str) -> None:
+        self._idle_reason_per_uav.pop(uav_id, None)
+        self._idle_since_by_uav.pop(uav_id, None)
+
+    def _has_idle_assist_opportunity(self) -> bool:
+        return (
+            bool(self.config["search"].get("idle_assist_enabled", True))
+            and not self._mission_goal_met()
+            and any(uav.status == UAVStatus.IDLE for uav in self.fleet.get_available_uavs())
+            and any(task.type == TaskType.SEARCH and task.assigned_uav_id is not None for task in self.task_manager.get_active_tasks())
+        )
 
     def _collect_supplemental_region(self, seed: Position, candidates: set[Position], max_cells: int) -> set[Position]:
         region = {seed}

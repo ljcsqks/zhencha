@@ -116,7 +116,15 @@ test("mission draft can add a UAV, reset custom mission, and run it", async ({ p
   expect(added.position.y).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: /^Start$/i }).click();
-  await page.waitForTimeout(600);
+  await expect
+    .poll(
+      async () => {
+        const state = await (await request.get("http://127.0.0.1:8000/api/sim/state?include_map=false&state_level=lite")).json();
+        return state.uavs.find((uav: { id: string }) => uav.id === "uav_02")?.total_distance_m || 0;
+      },
+      { timeout: 10000 },
+    )
+    .toBeGreaterThan(0);
   await page.getByRole("button", { name: /^Pause$/i }).click();
   const runningState = await (await request.get("http://127.0.0.1:8000/api/sim/state?include_map=false&state_level=lite")).json();
   const customUav = runningState.uavs.find((uav: { id: string }) => uav.id === "uav_02");

@@ -29,6 +29,7 @@ def build_state(
     latest = simulator.snapshots[-1] if simulator.snapshots else {}
     include_full_map = include_map and state_level == "full"
     algorithm_version = str(config.get("algorithm", {}).get("version", DEFAULT_ALGORITHM_VERSION))
+    scheduler_diagnostics = scheduler.diagnostics_snapshot()
     state = {
         "time_s": simulator.time_s,
         "tick": simulator._tick,
@@ -39,14 +40,14 @@ def build_state(
         "available_algorithm_versions": [item["version"] for item in algorithms_payload()["algorithms"]],
         "global_coverage": grid_map.coverage_rate(),
         "priority_coverage": grid_map.coverage_rate(priority_only=True),
-        "uavs": latest.get("uavs", _uavs_from_fleet(fleet)),
+        "uavs": _with_idle_reasons(latest.get("uavs", _uavs_from_fleet(fleet)), scheduler_diagnostics),
         "commands": latest.get("commands", []),
         "command_acks": latest.get("command_acks", []),
         "events": latest.get("events", []),
         "advisory_summary": latest.get("advisory_summary", {}),
         "tasks": scheduler.task_status_snapshot(),
         "targets": scheduler.target_metrics_snapshot(),
-        "diagnostics": {"reachability": scheduler.reachability_diagnostics()},
+        "diagnostics": {"reachability": scheduler.reachability_diagnostics(), "scheduler": scheduler_diagnostics},
         "changed_cells": latest.get("changed_cells", []),
         "coverage_changed_cells": latest.get("coverage_changed_cells", []),
         "active_commands": latest.get("active_commands", []),
@@ -196,4 +197,17 @@ def _uavs_from_fleet(fleet: FleetManager) -> list[dict[str, Any]]:
             "effective_search_distance_m": state.effective_search_distance_m,
         }
         for state in fleet.get_all_states()
+    ]
+
+
+def _with_idle_reasons(uavs: list[dict[str, Any]], scheduler_diagnostics: dict[str, Any]) -> list[dict[str, Any]]:
+    reasons = scheduler_diagnostics.get("idle_reason_per_uav", {})
+    if not isinstance(reasons, dict):
+        return uavs
+    return [
+        {
+            **uav,
+            **({"idle_reason": reasons.get(str(uav.get("id")))} if reasons.get(str(uav.get("id"))) else {}),
+        }
+        for uav in uavs
     ]
