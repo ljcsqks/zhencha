@@ -20,6 +20,7 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
   const assistCreated = numberMetric(scheduler.idle_assist_created_tasks);
   const assistAccepted = numberMetric(scheduler.idle_assist_accepted_tasks);
   const clusteredLaunch = booleanMetric(segment.clustered_launch_detected);
+  const launchProfile = stringMetric(segment.launch_profile);
   const dynamicRepairs = numberMetric(scheduler.dynamic_route_repair_success);
 
   return (
@@ -65,6 +66,11 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
           icon={targetCount > 0 && confirmRate >= 1 ? <CheckCircle2 size={15} /> : undefined}
         />
         <StatusRow label="Algorithm" value={state?.algorithm_version || "-"} mono />
+        <StatusRow
+          label="协同展开模式"
+          value={formatLaunchProfile(launchProfile)}
+          tone={launchProfile === "clustered_point_launch" || launchProfile === "common_edge_staging" ? "ok" : undefined}
+        />
         <StatusRow label="Cooperative sectors" value={clusteredLaunch ? "Enabled" : "Not active"} tone={clusteredLaunch ? "ok" : undefined} />
         {(assistCreated > 0 || assistAccepted > 0) && (
           <StatusRow label="Idle assist" value={`${assistAccepted}/${assistCreated} accepted`} tone="ok" />
@@ -140,6 +146,17 @@ function numberMetric(value: unknown): number {
 
 function booleanMetric(value: unknown): boolean {
   return value === true || value === "true";
+}
+
+function stringMetric(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function formatLaunchProfile(profile: string): string {
+  if (profile === "clustered_point_launch") return "集结点";
+  if (profile === "common_edge_staging") return "同侧展开";
+  if (profile === "distributed_deployment") return "分散部署";
+  return "-";
 }
 
 function nestedRecord(payload: Record<string, unknown> | undefined, path: string[]): Record<string, unknown> {

@@ -9,6 +9,7 @@ from uav_search.maps.map_loader import build_grid_map
 from uav_search.planning.coverage_planner import (
     AdaptiveComponentSweepPlanner,
     ComponentComplexityAnalyzer,
+    LaunchProfileAnalyzer,
     SegmentConnectorCostCache,
     SegmentSweepPlanner,
     SweepCluster,
@@ -466,6 +467,7 @@ def test_adaptive_simple_guardrail_records_baseline_choice_for_three_uav_simple_
         {
             "algorithm": {
                 "adaptive_component_sweep": {
+                    "common_edge_staging_enabled": False,
                     "simple_guardrail_enabled": True,
                     "simple_guardrail_max_cost_ratio": 1.03,
                     "simple_guardrail_max_connector_ratio": 1.05,
@@ -626,6 +628,141 @@ def test_adaptive_clustered_launch_simple_area_uses_sector_tasks() -> None:
     assert min(cells_per_task) >= (sum(cells_per_task) / len(cells_per_task)) * 0.5
     assert all(task.metadata["clustered_launch_sector_task"] is True for task in tasks)
     assert all(task.coverage_waypoints[0].x <= task.coverage_waypoints[-1].x for task in tasks)
+
+
+def test_common_edge_staging_detects_spread_bottom_launch_order() -> None:
+    grid_map = GridMap(width_m=500, height_m=500, resolution_m=10)
+    uavs = [
+        _uav("uav_01", Position(4, 0)),
+        _uav("uav_02", Position(22, 1)),
+        _uav("uav_03", Position(40, 0)),
+    ]
+
+    profile = LaunchProfileAnalyzer(
+        {
+            "common_edge_staging_enabled": True,
+            "common_edge_staging_max_edge_distance_cells": 3,
+            "common_edge_staging_min_searchable_cells": 300,
+        }
+    ).analyze(uavs, grid_map, searchable_cells=set(grid_map.get_searchable_cells()))
+
+    assert profile.launch_profile == "common_edge_staging"
+    assert profile.diagnostics["common_edge_staging_detected"] is True
+    assert profile.diagnostics["launch_entry_side"] == "north"
+    assert profile.diagnostics["common_edge_uav_projection_order"] == ["uav_01", "uav_02", "uav_03"]
+
+
+def test_adaptive_common_edge_staging_uses_ordered_sector_tasks() -> None:
+    grid_map = GridMap(width_m=500, height_m=500, resolution_m=10)
+    uavs = [
+        _uav("uav_01", Position(4, 0)),
+        _uav("uav_02", Position(22, 1)),
+        _uav("uav_03", Position(40, 0)),
+    ]
+    planner = AdaptiveComponentSweepPlanner(
+        {
+            "algorithm": {
+                "adaptive_component_sweep": {
+                    "clustered_launch_enabled": True,
+                    "clustered_launch_max_pairwise_distance_cells": 8,
+                    "common_edge_staging_enabled": True,
+                    "common_edge_staging_max_edge_distance_cells": 3,
+                    "common_edge_sector_min_cells_ratio": 0.5,
+                }
+            }
+        }
+    )
+
+    tasks = planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert len(tasks) == 3
+    assert planner.last_diagnostics["launch_profile"] == "common_edge_staging"
+    assert planner.last_diagnostics["common_edge_staging_detected"] is True
+    assert planner.last_diagnostics["chosen_component_planner"]["simple"] == "clustered_launch_sector_sweep"
+    assert planner.last_diagnostics["sector_assignment_order"] == ["uav_01", "uav_02", "uav_03"]
+    assert [next(iter(task.allowed_uav_ids)) for task in tasks] == ["uav_01", "uav_02", "uav_03"]
+    assert all(task.metadata["launch_profile"] == "common_edge_staging" for task in tasks)
+    cells = planner.last_diagnostics["sector_cells_per_uav"]
+    average_cells = sum(cells.values()) / len(cells)
+    assert all(value >= average_cells * 0.5 for value in cells.values())
+
+
+def test_distributed_deployment_does_not_use_sector_tasks() -> None:
+    grid_map = GridMap(width_m=500, height_m=500, resolution_m=10)
+    uavs = [
+        _uav("uav_01", Position(1, 1)),
+        _uav("uav_02", Position(48, 10)),
+        _uav("uav_03", Position(20, 48)),
+    ]
+    planner = AdaptiveComponentSweepPlanner(
+        {
+            "algorithm": {
+                "adaptive_component_sweep": {
+                    "clustered_launch_enabled": True,
+                    "common_edge_staging_enabled": True,
+                }
+            }
+        }
+    )
+
+    tasks = planner.plan_initial_tasks(
+        grid_map=grid_map,
+        uav_states=uavs,
+        sensor_radius_cells=2,
+        created_at=0.0,
+        reachability=build_reachability_index(grid_map, uavs),
+        searchable_cells=set(grid_map.get_searchable_cells()),
+    )
+
+    assert tasks
+    assert planner.last_diagnostics["launch_profile"] == "distributed_deployment"
+    assert planner.last_diagnostics["common_edge_staging_detected"] is False
+    assert planner.last_diagnostics.get("chosen_component_planner", {}).get("simple") != "clustered_launch_sector_sweep"
+    assert not any(task.metadata.get("clustered_launch_sector_task") for task in tasks)
+
+
+@pytest.mark.parametrize(
+    ("scenario_name", "expected_count"),
+    [
+        ("common_edge_3uav_spread_bottom", 3),
+        ("common_edge_3uav_spread_left", 3),
+        ("common_edge_4uav_spread_bottom", 4),
+        ("common_edge_3uav_sparse_obstacles", 3),
+    ],
+)
+def test_common_edge_scenarios_use_sector_sweep(scenario_name: str, expected_count: int) -> None:
+    planner, tasks = _plan_adaptive_scenario(scenario_name)
+
+    assert len(tasks) == expected_count
+    assert planner.last_diagnostics["launch_profile"] == "common_edge_staging"
+    assert planner.last_diagnostics["common_edge_staging_detected"] is True
+    assert planner.last_diagnostics["sector_assignment_order"] == [f"uav_{idx:02d}" for idx in range(1, expected_count + 1)]
+    assert all(task.metadata.get("clustered_launch_sector_task") is True for task in tasks)
+
+
+def test_distributed_scenario_keeps_distributed_profile() -> None:
+    planner, tasks = _plan_adaptive_scenario("distributed_3uav_should_not_sector")
+
+    assert tasks
+    assert planner.last_diagnostics["launch_profile"] == "distributed_deployment"
+    assert planner.last_diagnostics["common_edge_staging_detected"] is False
+    assert not any(task.metadata.get("clustered_launch_sector_task") for task in tasks)
+
+
+def test_map_update_scenario_keeps_existing_adaptive_path() -> None:
+    planner, tasks = _plan_adaptive_scenario("area_search_3uav")
+
+    assert tasks
+    assert planner.last_diagnostics["launch_profile"] == "distributed_deployment"
+    assert planner.last_diagnostics["common_edge_reason"] == "map_update_scenario"
+    assert not any(task.metadata.get("clustered_launch_sector_task") for task in tasks)
 
 
 def test_adaptive_complex_guardrail_falls_back_for_fragmented_but_not_maze() -> None:

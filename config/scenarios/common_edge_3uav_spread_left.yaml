@@ -1,0 +1,25 @@
+name: "common_edge_3uav_spread_left"
+description: "Three UAVs staged on the same left-side entry line for common-edge sector assignment."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 650
+
+map_features:
+  obstacles: []
+  no_fly_zones: []
+  priority_zones:
+    - {id: left_priority, shape: rectangle, frame: grid, x: 36, y: 34, width: 7, height: 8, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [0, 4], initial_position: [0, 4], battery: 1.0}
+  - {id: uav_02, home_position: [1, 22], initial_position: [1, 22], battery: 1.0}
+  - {id: uav_03, home_position: [0, 40], initial_position: [0, 40], battery: 1.0}
+
+events: []

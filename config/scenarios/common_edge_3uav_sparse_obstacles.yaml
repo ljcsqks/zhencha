@@ -1,0 +1,28 @@
+name: "common_edge_3uav_sparse_obstacles"
+description: "Common-edge staging with sparse obstacles and a no-fly zone to exercise sector cost balance."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 700
+
+map_features:
+  obstacles:
+    - {id: common_edge_block_a, shape: rectangle, frame: grid, x: 18, y: 10, width: 4, height: 7}
+    - {id: common_edge_block_b, shape: rectangle, frame: grid, x: 31, y: 28, width: 4, height: 6}
+  no_fly_zones:
+    - {id: common_edge_no_fly, shape: circle, frame: grid, center_x: 13, center_y: 34, radius: 3}
+  priority_zones:
+    - {id: common_edge_priority, shape: rectangle, frame: grid, x: 36, y: 36, width: 8, height: 7, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [4, 0], initial_position: [4, 0], battery: 1.0}
+  - {id: uav_02, home_position: [22, 1], initial_position: [22, 1], battery: 1.0}
+  - {id: uav_03, home_position: [40, 0], initial_position: [40, 0], battery: 1.0}
+
+events: []

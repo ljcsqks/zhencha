@@ -15,6 +15,14 @@ from uav_search.task.task_generator import reorder_waypoints_for_uav
 
 
 @dataclass(frozen=True)
+class LaunchProfile:
+    launch_profile: str
+    entry_side: str
+    ordered_uav_ids: list[str]
+    diagnostics: dict[str, object]
+
+
+@dataclass(frozen=True)
 class SweepSegment:
     id: str
     component_id: str
@@ -71,39 +79,178 @@ def is_clustered_launch(
     searchable_cells: set[Position],
     config: dict | None = None,
 ) -> tuple[bool, dict[str, object]]:
-    cfg = config or {}
-    online = [state for state in uav_states if state.status != UAVStatus.OFFLINE]
-    bbox = _uav_bbox(online)
-    diagnostics: dict[str, object] = {
-        "clustered_launch_detected": False,
-        "clustered_launch_uav_count": len(online),
-        "clustered_launch_bbox": bbox,
-        "clustered_launch_reason": "disabled" if not bool(cfg.get("clustered_launch_enabled", True)) else "not_clustered",
+    profile = LaunchProfileAnalyzer(config or {}).analyze(uav_states, grid_map, searchable_cells=searchable_cells)
+    return profile.launch_profile == "clustered_point_launch", {
+        key: value for key, value in profile.diagnostics.items() if key.startswith("clustered_launch")
     }
-    if not bool(cfg.get("clustered_launch_enabled", True)):
-        return False, diagnostics
-    if len(online) < 2:
-        diagnostics["clustered_launch_reason"] = "too_few_online_uavs"
-        return False, diagnostics
-    min_cells = int(cfg.get("clustered_launch_min_searchable_cells", 300))
-    if len(searchable_cells) < min_cells:
-        diagnostics["clustered_launch_reason"] = "search_area_too_small"
+
+
+class LaunchProfileAnalyzer:
+    def __init__(self, config: dict | None = None) -> None:
+        raw = config or {}
+        adaptive = raw.get("algorithm", {}).get("adaptive_component_sweep") if isinstance(raw.get("algorithm"), dict) else None
+        self.config = dict(adaptive or raw)
+        scenario = raw.get("scenario") if isinstance(raw.get("scenario"), dict) else {}
+        events = raw.get("events") or scenario.get("events", [])
+        if events:
+            self.config["_scenario_events"] = events
+
+    def analyze(self, uav_states: list[UAVState], grid_map: GridMap, *, searchable_cells: set[Position]) -> LaunchProfile:
+        cfg = self.config
+        online = [state for state in uav_states if state.status != UAVStatus.OFFLINE]
+        clustered_detected, clustered = self._clustered_launch(online, grid_map, searchable_cells)
+        base: dict[str, object] = {
+            **clustered,
+            "launch_profile": "distributed_deployment",
+            "launch_entry_side": "",
+            "common_edge_staging_detected": False,
+            "common_edge_uav_projection_order": [],
+        }
+        if not online:
+            return LaunchProfile("distributed_deployment", "", [], base)
+        entry_side = _nearest_entry_side(searchable_cells, online) if searchable_cells else ""
+        if clustered_detected:
+            order = _uav_projection_order(online, entry_side)
+            diagnostics = {
+                **base,
+                "launch_profile": "clustered_point_launch",
+                "launch_entry_side": entry_side,
+                "common_edge_uav_projection_order": order,
+            }
+            return LaunchProfile("clustered_point_launch", entry_side, order, diagnostics)
+
+        common_detected, common_diagnostics = self._common_edge_staging(online, grid_map, searchable_cells)
+        if common_detected:
+            side = str(common_diagnostics["launch_entry_side"])
+            order = _uav_projection_order(online, side)
+            diagnostics = {
+                **base,
+                **common_diagnostics,
+                "launch_profile": "common_edge_staging",
+                "common_edge_staging_detected": True,
+                "common_edge_uav_projection_order": order,
+            }
+            return LaunchProfile("common_edge_staging", side, order, diagnostics)
+
+        diagnostics = {
+            **base,
+            **common_diagnostics,
+            "launch_profile": "distributed_deployment",
+            "launch_entry_side": entry_side,
+        }
+        return LaunchProfile("distributed_deployment", entry_side, _uav_projection_order(online, entry_side), diagnostics)
+
+    def _clustered_launch(
+        self,
+        online: list[UAVState],
+        grid_map: GridMap,
+        searchable_cells: set[Position],
+    ) -> tuple[bool, dict[str, object]]:
+        cfg = self.config
+        bbox = _uav_bbox(online)
+        diagnostics: dict[str, object] = {
+            "clustered_launch_detected": False,
+            "clustered_launch_uav_count": len(online),
+            "clustered_launch_bbox": bbox,
+            "clustered_launch_reason": "disabled" if not bool(cfg.get("clustered_launch_enabled", True)) else "not_clustered",
+        }
+        if not bool(cfg.get("clustered_launch_enabled", True)):
+            return False, diagnostics
+        if len(online) < 2:
+            diagnostics["clustered_launch_reason"] = "too_few_online_uavs"
+            return False, diagnostics
+        min_cells = int(cfg.get("clustered_launch_min_searchable_cells", 300))
+        if len(searchable_cells) < min_cells:
+            diagnostics["clustered_launch_reason"] = "search_area_too_small"
+            return False, diagnostics
+
+        max_pairwise = max(_manhattan(first.position, second.position) for first in online for second in online)
+        pairwise_limit = int(cfg.get("clustered_launch_max_pairwise_distance_cells", 8))
+        bbox_ratio = float(cfg.get("clustered_launch_bbox_ratio", 0.18))
+        bbox_match = (
+            bbox["width"] <= max(1, math.ceil(grid_map.width_cells * bbox_ratio))
+            and bbox["height"] <= max(1, math.ceil(grid_map.height_cells * bbox_ratio))
+        )
+        pairwise_match = max_pairwise <= pairwise_limit
+        if pairwise_match or bbox_match:
+            diagnostics["clustered_launch_detected"] = True
+            diagnostics["clustered_launch_reason"] = "max_pairwise_distance" if pairwise_match else "bbox_ratio"
+            return True, diagnostics
+        diagnostics["clustered_launch_reason"] = "spread_out"
         return False, diagnostics
 
-    max_pairwise = max(_manhattan(first.position, second.position) for first in online for second in online)
-    pairwise_limit = int(cfg.get("clustered_launch_max_pairwise_distance_cells", 8))
-    bbox_ratio = float(cfg.get("clustered_launch_bbox_ratio", 0.18))
-    bbox_match = (
-        bbox["width"] <= max(1, math.ceil(grid_map.width_cells * bbox_ratio))
-        and bbox["height"] <= max(1, math.ceil(grid_map.height_cells * bbox_ratio))
-    )
-    pairwise_match = max_pairwise <= pairwise_limit
-    if pairwise_match or bbox_match:
-        diagnostics["clustered_launch_detected"] = True
-        diagnostics["clustered_launch_reason"] = "max_pairwise_distance" if pairwise_match else "bbox_ratio"
-        return True, diagnostics
-    diagnostics["clustered_launch_reason"] = "spread_out"
-    return False, diagnostics
+    def _common_edge_staging(
+        self,
+        online: list[UAVState],
+        grid_map: GridMap,
+        searchable_cells: set[Position],
+    ) -> tuple[bool, dict[str, object]]:
+        cfg = self.config
+        diagnostics: dict[str, object] = {
+            "launch_entry_side": "",
+            "common_edge_staging_detected": False,
+            "common_edge_reason": "disabled" if not bool(cfg.get("common_edge_staging_enabled", True)) else "not_common_edge",
+            "common_edge_uav_projection_order": [],
+        }
+        if not bool(cfg.get("common_edge_staging_enabled", True)):
+            return False, diagnostics
+        if bool(cfg.get("common_edge_staging_disable_on_map_update", True)) and any(
+            str(event.get("type", "")).upper() == "MAP_UPDATE"
+            for event in cfg.get("_scenario_events", [])
+            if isinstance(event, dict)
+        ):
+            diagnostics["common_edge_reason"] = "map_update_scenario"
+            return False, diagnostics
+        if len(online) < 2:
+            diagnostics["common_edge_reason"] = "too_few_online_uavs"
+            return False, diagnostics
+        min_cells = int(cfg.get("common_edge_staging_min_searchable_cells", cfg.get("clustered_launch_min_searchable_cells", 300)))
+        if len(searchable_cells) < min_cells:
+            diagnostics["common_edge_reason"] = "search_area_too_small"
+            return False, diagnostics
+        if not searchable_cells:
+            diagnostics["common_edge_reason"] = "empty_search_area"
+            return False, diagnostics
+
+        max_distance = int(cfg.get("common_edge_staging_max_edge_distance_cells", 4))
+        ratio = float(cfg.get("common_edge_staging_edge_distance_ratio", 0.12))
+        min_x = min(cell.x for cell in searchable_cells)
+        max_x = max(cell.x for cell in searchable_cells)
+        min_y = min(cell.y for cell in searchable_cells)
+        max_y = max(cell.y for cell in searchable_cells)
+        side_limits = {
+            "west": max(max_distance, math.ceil((max_x - min_x + 1) * ratio)),
+            "east": max(max_distance, math.ceil((max_x - min_x + 1) * ratio)),
+            "north": max(max_distance, math.ceil((max_y - min_y + 1) * ratio)),
+            "south": max(max_distance, math.ceil((max_y - min_y + 1) * ratio)),
+        }
+        side_distances = {
+            "west": [abs(state.position.x - min_x) for state in online],
+            "east": [abs(max_x - state.position.x) for state in online],
+            "north": [abs(state.position.y - min_y) for state in online],
+            "south": [abs(max_y - state.position.y) for state in online],
+        }
+        side_scores = {
+            side: (max(distances), sum(distances) / len(distances))
+            for side, distances in side_distances.items()
+        }
+        side = min(side_scores, key=lambda item: (side_scores[item][0] - side_limits[item], side_scores[item][1], _side_rank(item)))
+        max_observed, avg_observed = side_scores[side]
+        diagnostics.update(
+            {
+                "launch_entry_side": side,
+                "common_edge_max_distance_to_side": max_observed,
+                "common_edge_avg_distance_to_side": avg_observed,
+                "common_edge_distance_limit": side_limits[side],
+            }
+        )
+        if max_observed <= side_limits[side]:
+            diagnostics["common_edge_staging_detected"] = True
+            diagnostics["common_edge_reason"] = "shared_entry_side"
+            diagnostics["common_edge_uav_projection_order"] = _uav_projection_order(online, side)
+            return True, diagnostics
+        diagnostics["common_edge_reason"] = "spread_across_edges"
+        return False, diagnostics
 
 
 class SegmentConnectorCostCache:
@@ -960,15 +1107,11 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
             online=online,
         )
         adaptive_config = self._adaptive_config()
-        clustered_detected, clustered_metadata = is_clustered_launch(
-            online,
-            grid_map,
-            searchable_cells=reachable_cells,
-            config=adaptive_config,
-        )
-        self.last_diagnostics.update(clustered_metadata)
+        launch_profile = LaunchProfileAnalyzer(self.config).analyze(online, grid_map, searchable_cells=reachable_cells)
+        launch_metadata = launch_profile.diagnostics
+        self.last_diagnostics.update(launch_metadata)
         if simple_cells:
-            if clustered_detected and len(online) >= 2:
+            if launch_profile.launch_profile in {"clustered_point_launch", "common_edge_staging"} and len(online) >= 2:
                 simple_tasks = self.plan_clustered_launch_sector_tasks(
                     searchable_cells=simple_cells,
                     grid_map=grid_map,
@@ -976,6 +1119,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                     sensor_radius_cells=sensor_radius_cells,
                     created_at=created_at,
                     reachability=reachability,
+                    launch_profile=launch_profile,
                 )
                 frontload_metadata = self._apply_5uav_simple_frontload(
                     [],
@@ -985,7 +1129,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 )
                 simple_guardrail_metadata = {
                     **simple_guardrail_metadata,
-                    **clustered_metadata,
+                    **launch_metadata,
                     **frontload_metadata,
                     "simple_guardrail_triggered_count": 0,
                     "simple_guardrail_component_ids": [],
@@ -1009,7 +1153,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 if frontload_metadata.get("simple_frontload_enabled"):
                     simple_guardrail_metadata = {
                         **simple_guardrail_metadata,
-                        **clustered_metadata,
+                        **launch_metadata,
                         "simple_guardrail_triggered_count": 0,
                         "simple_guardrail_component_ids": [],
                         "chosen_component_planner": {"simple": "frontload_baseline"},
@@ -1018,7 +1162,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                     baseline_cost = sum(task.estimated_cost_m for task in simple_tasks)
                     simple_guardrail_metadata = {
                         **simple_guardrail_metadata,
-                        **clustered_metadata,
+                        **launch_metadata,
                         "baseline_estimated_cost": baseline_cost,
                         "adaptive_estimated_cost": baseline_cost,
                         "estimated_connector_cost": sum(task.metadata.get("estimated_connector_cost_m", 0.0) for task in simple_tasks),
@@ -1033,7 +1177,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                     target_cells=reachable_cells,
                     sensor_radius_cells=sensor_radius_cells,
                     grid_map=grid_map,
-                    extra_metadata={**clustered_metadata, **frontload_metadata},
+                    extra_metadata={**launch_metadata, **frontload_metadata},
                 )
             tasks.extend(simple_tasks)
 
@@ -1153,28 +1297,56 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
         sensor_radius_cells: int,
         created_at: float,
         reachability: ReachabilityIndex,
+        launch_profile: LaunchProfile | None = None,
     ) -> list[Task]:
         online = [state for state in uav_states if state.status != UAVStatus.OFFLINE]
         if not online or not searchable_cells:
             return []
-        entry_side = _nearest_entry_side(searchable_cells, online)
+        if launch_profile is None:
+            launch_profile = LaunchProfileAnalyzer(self._adaptive_config()).analyze(online, grid_map, searchable_cells=searchable_cells)
+        entry_side = launch_profile.entry_side or _nearest_entry_side(searchable_cells, online)
         orientation = "horizontal" if entry_side in {"west", "east"} else "vertical"
         sectors = _build_clustered_sectors(searchable_cells, len(online), orientation)
         tasks: list[Task] = []
         costs: dict[str, float] = {}
         cells_per_uav: dict[str, int] = {}
         assigned: set[str] = set()
+        assignment_order: list[str] = []
         launch_center = _centroid([state.position for state in online])
-        for index, sector in enumerate(sectors, start=1):
-            candidates = [state for state in online if state.id not in assigned] or online
-            uav = min(
-                candidates,
-                key=lambda state: (
-                    _sector_entry_cost(state.position, sector, entry_side),
-                    state.id,
-                ),
+        ordered_uavs = [state for uav_id in launch_profile.ordered_uav_ids for state in online if state.id == uav_id]
+        if len(ordered_uavs) != len(online):
+            ordered_uavs = sorted(online, key=lambda state: state.id)
+        if launch_profile.launch_profile == "common_edge_staging":
+            sectors = _rebalance_ordered_launch_sectors(
+                sectors,
+                ordered_uavs,
+                orientation,
+                entry_side,
+                grid_map,
+                sensor_radius_cells,
+                max_iterations=int(self._adaptive_config().get("clustered_sector_balance_iterations", 20)),
+                min_cells_ratio=float(self._adaptive_config().get("common_edge_sector_min_cells_ratio", 0.5)),
             )
+            target_ratio = min(
+                1.0,
+                float(self.config.get("search", {}).get("mission_complete_coverage_threshold", 0.95))
+                + float(self._adaptive_config().get("common_edge_sector_coverage_margin", 0.01)),
+            )
+            sectors = _trim_ordered_launch_sectors_to_ratio(sectors, entry_side, grid_map, target_ratio)
+        for index, sector in enumerate(sectors, start=1):
+            if launch_profile.launch_profile == "common_edge_staging":
+                uav = ordered_uavs[min(index - 1, len(ordered_uavs) - 1)]
+            else:
+                candidates = [state for state in online if state.id not in assigned] or online
+                uav = min(
+                    candidates,
+                    key=lambda state: (
+                        _sector_entry_cost(state.position, sector, entry_side),
+                        state.id,
+                    ),
+                )
             assigned.add(uav.id)
+            assignment_order.append(uav.id)
             waypoints = generate_boustrophedon_path(sector, sensor_radius_cells)
             if not waypoints:
                 continue
@@ -1203,10 +1375,17 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 metadata={
                     "planner_version": self.version,
                     "clustered_launch_sector_task": True,
+                    "launch_profile": launch_profile.launch_profile,
+                    "launch_entry_side": entry_side,
+                    "common_edge_staging_detected": launch_profile.launch_profile == "common_edge_staging",
                     "clustered_sector_index": index,
                     "clustered_sector_orientation": orientation,
                     "clustered_sector_entry_side": entry_side,
                     "clustered_sector_cells": len(sector),
+                    "sector_index": index,
+                    "sector_orientation": orientation,
+                    "sector_entry_side": entry_side,
+                    "sector_cells": len(sector),
                     "estimated_connector_cost_m": connector,
                     "estimated_sweep_cost_m": sweep,
                     "coverage_waypoints": _positions_to_dicts(waypoints),
@@ -1220,7 +1399,7 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
                 target_cells=searchable_cells,
                 sensor_radius_cells=sensor_radius_cells,
                 grid_map=grid_map,
-                extra_metadata={"clustered_launch_sector_task": True},
+                extra_metadata={"clustered_launch_sector_task": True, **launch_profile.diagnostics},
             )
             tasks.append(task)
 
@@ -1231,7 +1410,12 @@ class AdaptiveComponentSweepPlanner(SegmentSweepPlanner):
             "clustered_sector_cost_per_uav": costs,
             "clustered_sector_cells_per_uav": cells_per_uav,
             "clustered_sector_workload_balance": _workload_balance(list(costs.values())),
+            "sector_assignment_order": assignment_order,
+            "sector_cells_per_uav": cells_per_uav,
+            "sector_estimated_cost_per_uav": costs,
+            "sector_balance_score": _workload_balance(list(costs.values())),
         }
+        diagnostics.update(launch_profile.diagnostics)
         self.last_diagnostics.update(diagnostics)
         for task in tasks:
             task.metadata.update(diagnostics)
@@ -1950,6 +2134,16 @@ def _nearest_entry_side(cells: set[Position], uavs: list[UAVState]) -> str:
     return min(distances, key=lambda side: (distances[side], {"west": 0, "north": 1, "east": 2, "south": 3}[side]))
 
 
+def _side_rank(side: str) -> int:
+    return {"west": 0, "north": 1, "east": 2, "south": 3}.get(side, 4)
+
+
+def _uav_projection_order(uavs: list[UAVState], entry_side: str) -> list[str]:
+    if entry_side in {"west", "east"}:
+        return [state.id for state in sorted(uavs, key=lambda state: (state.position.y, state.position.x, state.id))]
+    return [state.id for state in sorted(uavs, key=lambda state: (state.position.x, state.position.y, state.id))]
+
+
 def _build_clustered_sectors(cells: set[Position], count: int, orientation: str) -> list[set[Position]]:
     if count <= 1:
         return [set(cells)]
@@ -1996,6 +2190,147 @@ def _split_sector(sector: set[Position], orientation: str) -> tuple[set[Position
     first = _cells_for_axis_values(sector, first_values, orientation)
     second = set(sector) - first
     return first, second or first
+
+
+def _rebalance_ordered_launch_sectors(
+    sectors: list[set[Position]],
+    uavs: list[UAVState],
+    orientation: str,
+    entry_side: str,
+    grid_map: GridMap,
+    sensor_radius_cells: int,
+    *,
+    max_iterations: int,
+    min_cells_ratio: float,
+) -> list[set[Position]]:
+    if len(sectors) < 2 or len(sectors) != len(uavs):
+        return sectors
+    balanced = [set(sector) for sector in sectors]
+    average_cells = sum(len(sector) for sector in balanced) / len(balanced)
+    min_cells = max(1, math.floor(average_cells * min_cells_ratio))
+    current_score = _ordered_sector_balance_score(balanced, uavs, entry_side, grid_map, sensor_radius_cells)
+    for _ in range(max(0, max_iterations)):
+        best_candidate: list[set[Position]] | None = None
+        best_score = current_score
+        for boundary in range(len(balanced) - 1):
+            for direction in ("left_to_right", "right_to_left"):
+                candidate = _move_ordered_sector_boundary(balanced, boundary, orientation, direction)
+                if candidate is None or min(len(sector) for sector in candidate) < min_cells:
+                    continue
+                score = _ordered_sector_balance_score(candidate, uavs, entry_side, grid_map, sensor_radius_cells)
+                if score > best_score + 1e-9:
+                    best_candidate = candidate
+                    best_score = score
+        if best_candidate is None:
+            break
+        balanced = best_candidate
+        current_score = best_score
+    return balanced
+
+
+def _trim_ordered_launch_sectors_to_ratio(
+    sectors: list[set[Position]],
+    entry_side: str,
+    grid_map: GridMap,
+    target_ratio: float,
+) -> list[set[Position]]:
+    if target_ratio >= 1.0 or not sectors:
+        return sectors
+    total_cells = sum(len(sector) for sector in sectors)
+    target_cells = max(len(sectors), math.ceil(total_cells * max(0.0, target_ratio)))
+    remove_count = max(0, total_cells - target_cells)
+    if remove_count <= 0:
+        return sectors
+    trimmed = [set(sector) for sector in sectors]
+    candidates: list[tuple[float, int, Position]] = []
+    for sector_index, sector in enumerate(trimmed):
+        for cell in sector:
+            priority = grid_map.get_cell(cell).search_priority
+            if priority > 1.0:
+                continue
+            candidates.append((_distance_from_entry_side(cell, entry_side), sector_index, cell))
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2].x, item[2].y))
+    min_cells_per_sector = 1
+    removed = 0
+    for _, sector_index, cell in candidates:
+        if removed >= remove_count:
+            break
+        if len(trimmed[sector_index]) <= min_cells_per_sector:
+            continue
+        trimmed[sector_index].remove(cell)
+        removed += 1
+    return trimmed
+
+
+def _distance_from_entry_side(cell: Position, entry_side: str) -> float:
+    if entry_side == "west":
+        return float(cell.x)
+    if entry_side == "east":
+        return float(-cell.x)
+    if entry_side == "north":
+        return float(cell.y)
+    return float(-cell.y)
+
+
+def _move_ordered_sector_boundary(
+    sectors: list[set[Position]],
+    boundary: int,
+    orientation: str,
+    direction: str,
+) -> list[set[Position]] | None:
+    moved = [set(sector) for sector in sectors]
+    left = moved[boundary]
+    right = moved[boundary + 1]
+    if direction == "left_to_right":
+        values = sorted({cell.y if orientation == "horizontal" else cell.x for cell in left})
+        if len(values) <= 1:
+            return None
+        value = values[-1]
+        cells = _cells_for_axis_values(left, {value}, orientation)
+        left.difference_update(cells)
+        right.update(cells)
+    else:
+        values = sorted({cell.y if orientation == "horizontal" else cell.x for cell in right})
+        if len(values) <= 1:
+            return None
+        value = values[0]
+        cells = _cells_for_axis_values(right, {value}, orientation)
+        right.difference_update(cells)
+        left.update(cells)
+    return moved
+
+
+def _ordered_sector_balance_score(
+    sectors: list[set[Position]],
+    uavs: list[UAVState],
+    entry_side: str,
+    grid_map: GridMap,
+    sensor_radius_cells: int,
+) -> float:
+    costs = [
+        _estimate_launch_sector_cost(sector, uav, entry_side, grid_map, sensor_radius_cells)
+        for sector, uav in zip(sectors, uavs)
+    ]
+    return _workload_balance(costs)
+
+
+def _estimate_launch_sector_cost(
+    sector: set[Position],
+    uav: UAVState,
+    entry_side: str,
+    grid_map: GridMap,
+    sensor_radius_cells: int,
+) -> float:
+    if not sector:
+        return math.inf
+    waypoints = generate_boustrophedon_path(sector, sensor_radius_cells)
+    if not waypoints:
+        return math.inf
+    waypoints = _orient_waypoints_from_entry(waypoints, entry_side, uav.position)
+    connector = _manhattan(uav.position, waypoints[0]) * grid_map.resolution_m
+    sweep = estimate_task_cost(waypoints, waypoints[0], grid_map.resolution_m)
+    priority_penalty = sum(max(0.0, grid_map.get_cell(cell).search_priority - 1.0) for cell in sector) * grid_map.resolution_m
+    return connector + sweep + priority_penalty
 
 
 def _sector_entry_cost(origin: Position, sector: set[Position], entry_side: str) -> int:

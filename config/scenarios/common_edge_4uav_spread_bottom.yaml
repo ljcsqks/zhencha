@@ -1,0 +1,26 @@
+name: "common_edge_4uav_spread_bottom"
+description: "Four UAVs staged along one entry edge to validate ordered sector fan-out and balance."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 4
+  simulation:
+    max_steps: 650
+
+map_features:
+  obstacles: []
+  no_fly_zones: []
+  priority_zones:
+    - {id: four_bottom_priority, shape: rectangle, frame: grid, x: 34, y: 34, width: 8, height: 8, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [3, 0], initial_position: [3, 0], battery: 1.0}
+  - {id: uav_02, home_position: [16, 1], initial_position: [16, 1], battery: 1.0}
+  - {id: uav_03, home_position: [30, 0], initial_position: [30, 0], battery: 1.0}
+  - {id: uav_04, home_position: [43, 1], initial_position: [43, 1], battery: 1.0}
+
+events: []

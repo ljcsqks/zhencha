@@ -635,6 +635,10 @@ def _export_summary(
         "clustered_sector_entry_side": _nested_metric(metrics, ["diagnostics", "segment_quality", "clustered_sector_entry_side"], ""),
         "clustered_sector_count": _nested_metric(metrics, ["diagnostics", "segment_quality", "clustered_sector_count"], 0),
         "clustered_sector_workload_balance": _nested_metric(metrics, ["diagnostics", "segment_quality", "clustered_sector_workload_balance"], 1.0),
+        "launch_profile": _nested_metric(metrics, ["diagnostics", "segment_quality", "launch_profile"], ""),
+        "launch_entry_side": _nested_metric(metrics, ["diagnostics", "segment_quality", "launch_entry_side"], ""),
+        "common_edge_staging_detected": _nested_metric(metrics, ["diagnostics", "segment_quality", "common_edge_staging_detected"], False),
+        "sector_balance_score": _nested_metric(metrics, ["diagnostics", "segment_quality", "sector_balance_score"], 1.0),
         "planned_coverage_ratio": _nested_metric(metrics, ["diagnostics", "segment_quality", "fleet_planned_coverage_ratio"], 0.0),
         "planned_actual_gap_abs": _nested_metric(metrics, ["diagnostics", "segment_quality", "planned_actual_gap_abs"], 0.0),
         "planned_vs_actual_explanation": _nested_metric(

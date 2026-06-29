@@ -356,6 +356,18 @@ def _cluster_quality_from_commands(snapshots: list[dict[str, Any]]) -> dict[str,
         "clustered_sector_cost_per_uav": {},
         "clustered_sector_cells_per_uav": {},
         "clustered_sector_workload_balance": 1.0,
+        "launch_profile": "",
+        "launch_entry_side": "",
+        "common_edge_staging_detected": False,
+        "common_edge_reason": "",
+        "common_edge_uav_projection_order": [],
+        "common_edge_max_distance_to_side": 0.0,
+        "common_edge_avg_distance_to_side": 0.0,
+        "common_edge_distance_limit": 0.0,
+        "sector_assignment_order": [],
+        "sector_cells_per_uav": {},
+        "sector_estimated_cost_per_uav": {},
+        "sector_balance_score": 1.0,
     }
     seen: set[tuple[str, tuple[str, ...]]] = set()
     for snapshot in snapshots:

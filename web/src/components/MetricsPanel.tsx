@@ -54,7 +54,13 @@ export function MetricsPanel({ state, fullMetrics, onFetchMetrics }: Props) {
           <span>planned {formatMetric(adaptiveDiagnostics.fleet_planned_coverage_ratio)}</span>
           <span>gap {formatMetric(adaptiveDiagnostics.planned_actual_gap_abs)}</span>
           <span>clustered launch {formatMetric(adaptiveDiagnostics.clustered_launch_detected)}</span>
+          <span>launch {formatMetric(adaptiveDiagnostics.launch_profile)}</span>
+          <span>entry {formatMetric(adaptiveDiagnostics.launch_entry_side)}</span>
+          <span>common edge {formatMetric(adaptiveDiagnostics.common_edge_staging_detected)}</span>
+          <span>projection {formatMetric(adaptiveDiagnostics.common_edge_uav_projection_order)}</span>
+          <span>assignment {formatMetric(adaptiveDiagnostics.sector_assignment_order)}</span>
           <span>sector {formatMetric(adaptiveDiagnostics.clustered_sector_orientation)}</span>
+          <span>sector balance {formatMetric(adaptiveDiagnostics.sector_balance_score)}</span>
           <span>{formatMetric(adaptiveDiagnostics.planned_vs_actual_explanation)}</span>
         </div>
       )}
@@ -80,6 +86,9 @@ function formatMetric(value: unknown): string {
   }
   if (typeof value === "boolean") {
     return value ? "true" : "false";
+  }
+  if (Array.isArray(value)) {
+    return value.join(", ");
   }
   return value == null ? "-" : String(value);
 }

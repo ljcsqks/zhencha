@@ -1,0 +1,25 @@
+name: "distributed_3uav_should_not_sector"
+description: "Three UAVs deployed across different edges; adaptive should keep distributed baseline-style allocation."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 650
+
+map_features:
+  obstacles: []
+  no_fly_zones: []
+  priority_zones:
+    - {id: distributed_priority, shape: rectangle, frame: grid, x: 34, y: 34, width: 8, height: 8, priority: 3.0}
+
+uavs:
+  - {id: uav_01, home_position: [1, 1], initial_position: [1, 1], battery: 1.0}
+  - {id: uav_02, home_position: [48, 10], initial_position: [48, 10], battery: 1.0}
+  - {id: uav_03, home_position: [20, 48], initial_position: [20, 48], battery: 1.0}
+
+events: []
