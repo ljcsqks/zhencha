@@ -285,7 +285,7 @@ class SimulationRuntime:
     def _event_from_request(self, request: EventRequest) -> Event:
         event_type = EventType(request.type)
         data = _normalize_event_data(event_type, request.data)
-        priority = EventPriority.CRITICAL if event_type == EventType.TARGET_FOUND else EventPriority.HIGH
+        priority = EventPriority.CRITICAL if event_type in (EventType.TARGET_FOUND, EventType.BUILDING_MODEL_REQUEST) else EventPriority.HIGH
         return Event(
             id=f"server_{event_type.value.lower()}_{uuid4().hex[:8]}",
             type=event_type,
@@ -619,6 +619,18 @@ def _export_summary(
         "dynamic_route_repair_dropped_waypoints": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "dynamic_route_repair_dropped_waypoints"], 0),
         "dynamic_route_repair_replanned_tasks": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "dynamic_route_repair_replanned_tasks"], 0),
         "dynamic_route_repair_fallback_to_supplemental": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "dynamic_route_repair_fallback_to_supplemental"], 0),
+        "modeling_jobs_total": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_jobs_total"], 0),
+        "modeling_jobs_completed": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_jobs_completed"], 0),
+        "modeling_jobs_failed": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_jobs_failed"], 0),
+        "modeling_active_jobs": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_active_jobs"], 0),
+        "modeling_assigned_uav_count": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_assigned_uav_count"], 0),
+        "modeling_facade_lane_count": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_facade_lane_count"], 0),
+        "modeling_facade_progress_ratio": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_facade_progress_ratio"], 0),
+        "modeling_distance_m": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_distance_m"], 0),
+        "modeling_interrupted_search_tasks": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_interrupted_search_tasks"], 0),
+        "modeling_resumed_search_tasks": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_resumed_search_tasks"], 0),
+        "modeling_unreachable_facade_lanes": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_unreachable_facade_lanes"], 0),
+        "modeling_no_fly_violations": _nested_metric(metrics, ["diagnostics", "scheduler_quality", "modeling_no_fly_violations"], 0),
         "post_95_extra_distance_m": metrics.get("post_95_extra_distance_m"),
         "post_95_search_distance_m": _nested_metric(metrics, ["diagnostics", "coverage_quality", "post_95_search_distance_m"], 0.0),
         "post_95_return_distance_m": _nested_metric(metrics, ["diagnostics", "coverage_quality", "post_95_return_distance_m"], 0.0),

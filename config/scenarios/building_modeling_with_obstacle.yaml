@@ -1,0 +1,60 @@
+name: "building_modeling_with_obstacle"
+description: "Facade modeling request with an obstacle forcing connector routing around clutter."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 3
+  simulation:
+    max_steps: 260
+
+map_features:
+  obstacles:
+    - id: "connector_barrier"
+      shape: "rectangle"
+      frame: "grid"
+      x: 18
+      y: 8
+      width: 2
+      height: 18
+    - id: "courtyard_block"
+      shape: "rectangle"
+      frame: "grid"
+      x: 24
+      y: 30
+      width: 6
+      height: 3
+
+uavs:
+  - id: "uav_01"
+    home_position: [4, 8]
+    initial_position: [4, 8]
+    battery: 1.0
+  - id: "uav_02"
+    home_position: [4, 24]
+    initial_position: [4, 24]
+    battery: 1.0
+  - id: "uav_03"
+    home_position: [4, 40]
+    initial_position: [4, 40]
+    battery: 1.0
+
+events:
+  - id: "building_modeling_with_obstacle_request"
+    time_s: 0
+    type: "BUILDING_MODEL_REQUEST"
+    priority: "CRITICAL"
+    data:
+      building_id: "building_demo_d"
+      footprint:
+        - {x: 32, y: 12}
+        - {x: 40, y: 12}
+        - {x: 40, y: 20}
+        - {x: 32, y: 20}
+      uav_count: 2
+      standoff_cells: 3
+      laps: 1
+      resume_search_after: true

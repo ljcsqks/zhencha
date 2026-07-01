@@ -526,6 +526,18 @@ def _scheduler_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "dynamic_route_repair_dropped_waypoints",
         "dynamic_route_repair_replanned_tasks",
         "dynamic_route_repair_fallback_to_supplemental",
+        "modeling_jobs_total",
+        "modeling_jobs_completed",
+        "modeling_jobs_failed",
+        "modeling_active_jobs",
+        "modeling_assigned_uav_count",
+        "modeling_facade_lane_count",
+        "modeling_facade_progress_ratio",
+        "modeling_distance_m",
+        "modeling_interrupted_search_tasks",
+        "modeling_resumed_search_tasks",
+        "modeling_unreachable_facade_lanes",
+        "modeling_no_fly_violations",
     }
     result = {key: 0 for key in keys}
     latest_idle_reasons: dict[str, str] = {}

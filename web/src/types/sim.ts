@@ -78,6 +78,7 @@ export interface ControlCommandSnapshot {
   advisory?: boolean;
   issued_at?: number | null;
   updated_at?: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CommandAckSnapshot {
@@ -150,10 +151,11 @@ export interface ActiveCommandSnapshot {
   remaining_path: GridPosition[];
   progress?: number | null;
   issued_at?: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface EventRequest {
-  type: "TARGET_FOUND" | "MAP_UPDATE" | "UAV_OFFLINE" | "UAV_RECOVERED";
+  type: "TARGET_FOUND" | "MAP_UPDATE" | "UAV_OFFLINE" | "UAV_RECOVERED" | "BUILDING_MODEL_REQUEST";
   time_s?: number | null;
   source_uav_id?: string | null;
   data: Record<string, unknown>;

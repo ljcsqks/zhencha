@@ -1,4 +1,4 @@
-import { Crosshair, Eye, Eraser, Grid3X3, History, Map, Plane, Route, ShieldPlus } from "lucide-react";
+import { Building2, Crosshair, Eye, Eraser, Grid3X3, History, Map, Plane, Route, ShieldPlus } from "lucide-react";
 import type { ToolMode, UseSimulationResult } from "../hooks/useSimulation";
 
 interface Props {
@@ -11,6 +11,7 @@ const modes: Array<{ id: ToolMode; label: string; icon: typeof Eye }> = [
   { id: "addUav", label: "Add UAV", icon: Plane },
   { id: "addObstacle", label: "Add Obstacle", icon: ShieldPlus },
   { id: "removeObstacle", label: "Remove Obstacle", icon: Eraser },
+  { id: "modelBuilding", label: "Model Building", icon: Building2 },
 ];
 
 export function Toolbar({ sim }: Props) {
@@ -33,6 +34,49 @@ export function Toolbar({ sim }: Props) {
           );
         })}
       </div>
+
+      {sim.toolMode === "modelBuilding" && (
+        <div className="tool-options">
+          <label>
+            UAVs
+            <input
+              type="number"
+              min={1}
+              max={4}
+              value={sim.modelingUavCount}
+              onChange={(event) => sim.setModelingUavCount(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Standoff
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={sim.modelingStandoffCells}
+              onChange={(event) => sim.setModelingStandoffCells(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Laps
+            <input
+              type="number"
+              min={1}
+              max={4}
+              value={sim.modelingLaps}
+              onChange={(event) => sim.setModelingLaps(Number(event.target.value))}
+            />
+          </label>
+          <label className="tool-option-inline">
+            <input
+              type="checkbox"
+              checked={sim.modelingResumeSearch}
+              onChange={(event) => sim.setModelingResumeSearch(event.target.checked)}
+            />
+            Resume search
+          </label>
+        </div>
+      )}
 
       <div className="toggle-list">
         <label>

@@ -158,3 +158,47 @@ test("mission draft can add a UAV, reset custom mission, and run it", async ({ p
   const customUav = runningState.uavs.find((uav: { id: string }) => uav.id === "uav_02");
   expect(customUav.total_distance_m).toBeGreaterThan(0);
 });
+
+test("operator can request building modeling from a dragged footprint", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/api/sim/reset", {
+    data: {
+      config_path: "config/default.yaml",
+      scenario_path: "config/scenarios/area_search_3uav.yaml",
+      algorithm_version: "adaptive_component_sweep_v1",
+    },
+  });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: /^Operator$/ })).toHaveAttribute("aria-pressed", "true");
+  const canvas = page.locator("canvas.map-canvas");
+  await expect(canvas).toBeVisible();
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  await page.getByRole("button", { name: "Model Building" }).click();
+  await expect(page.getByText("Drag rectangle for building footprint")).toBeVisible();
+  await page.getByLabel("UAVs").fill("2");
+  await page.getByLabel("Standoff").fill("3");
+  await page.getByLabel("Laps").fill("1");
+
+  await canvas.dragTo(canvas, {
+    sourcePosition: { x: box.width * 0.6, y: box.height * 0.2 },
+    targetPosition: { x: box.width * 0.74, y: box.height * 0.34 },
+  });
+
+  await expect
+    .poll(
+      async () => {
+        const state = await (await request.get("http://127.0.0.1:8000/api/sim/state?include_map=false&state_level=lite")).json();
+        return state.diagnostics.scheduler.modeling_jobs_total;
+      },
+      { timeout: 10000 },
+    )
+    .toBeGreaterThan(0);
+  await expect(page.locator(".mission-status-row", { hasText: "Building modeling" })).toBeVisible({ timeout: 10000 });
+  const state = await (await request.get("http://127.0.0.1:8000/api/sim/state?include_map=false&state_level=lite")).json();
+  expect(state.algorithm_version).toBe("adaptive_component_sweep_v1");
+  expect(state.diagnostics.scheduler.modeling_jobs_total).toBeGreaterThan(0);
+  expect(state.tasks.modeling_tasks.length).toBeGreaterThan(0);
+  expect(state.commands.some((command: { command: string }) => command.command === "MODEL_STRUCTURE")).toBeTruthy();
+});

@@ -1,0 +1,35 @@
+name: "building_modeling_1uav"
+description: "Single UAV facade modeling request around a rectangular building footprint."
+
+overrides:
+  map:
+    width_m: 500
+    height_m: 500
+    resolution_m: 10
+  uav:
+    count: 1
+  simulation:
+    max_steps: 220
+
+uavs:
+  - id: "uav_01"
+    home_position: [4, 8]
+    initial_position: [4, 8]
+    battery: 1.0
+
+events:
+  - id: "building_modeling_1uav_request"
+    time_s: 0
+    type: "BUILDING_MODEL_REQUEST"
+    priority: "CRITICAL"
+    data:
+      building_id: "building_demo_a"
+      footprint:
+        - {x: 28, y: 14}
+        - {x: 36, y: 14}
+        - {x: 36, y: 22}
+        - {x: 28, y: 22}
+      uav_count: 1
+      standoff_cells: 3
+      laps: 1
+      resume_search_after: true

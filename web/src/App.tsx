@@ -40,6 +40,7 @@ export function App() {
       running: false,
       toolMode: "inspect",
       injectTarget: async () => undefined,
+      requestBuildingModel: async () => undefined,
       updateObstacle: async () => undefined,
       setUavOnlineState: async () => undefined,
       start: async () => undefined,

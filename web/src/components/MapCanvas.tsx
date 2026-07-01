@@ -12,7 +12,14 @@ interface Viewport {
   offsetY: number;
 }
 
-type PointerMode = "pan" | "dragUav" | "selectObstacle";
+type PointerMode = "pan" | "dragUav" | "selectRectangle";
+
+interface ModelingTaskView {
+  taskId: string;
+  status: string;
+  footprint: GridPosition[];
+  logicalWaypoints: GridPosition[];
+}
 
 const UAV_COLORS = ["#0077b6", "#e76f00", "#198754", "#d64562", "#7b2cbf", "#008c7a"];
 
@@ -27,6 +34,7 @@ export function MapCanvas({ sim }: Props) {
   const mapState = sim.fullMapState?.map;
   const commands = state?.commands || [];
   const activeCommands = state?.active_commands || [];
+  const modelingTasks = useMemo(() => modelingTasksFromState(state?.tasks), [state?.tasks]);
 
   const plannedPaths = useMemo(
     () =>
@@ -51,6 +59,7 @@ export function MapCanvas({ sim }: Props) {
     canvas.height = Math.max(1, Math.floor(rect.height * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawMap(ctx, rect.width, rect.height, mapState, viewport, sim.showCoverage, sim.showGrid, state.changed_cells || []);
+    drawModelingTasks(ctx, rect.width, rect.height, mapState, viewport, modelingTasks);
     if (sim.showPlannedPath) {
       drawPlannedPaths(ctx, rect.width, rect.height, mapState, viewport, plannedPaths, sim.selectedCommandId, sim.selectedUavId);
     }
@@ -66,6 +75,7 @@ export function MapCanvas({ sim }: Props) {
     dragEnd,
     dragStart,
     mapState,
+    modelingTasks,
     plannedPaths,
     sim.draftEditable,
     sim.missionDraft.draftUavs,
@@ -90,13 +100,13 @@ export function MapCanvas({ sim }: Props) {
 
   const clientPoint = (event: React.PointerEvent<HTMLCanvasElement>): GridPosition => ({ x: event.clientX, y: event.clientY });
 
-  const finishObstacleDrag = async () => {
+  const finishRectangleDrag = async () => {
     if (!dragStart || !dragEnd) {
       setDragStart(null);
       setDragEnd(null);
       return;
     }
-    if (sim.toolMode !== "addObstacle" && sim.toolMode !== "removeObstacle") {
+    if (sim.toolMode !== "addObstacle" && sim.toolMode !== "removeObstacle" && sim.toolMode !== "modelBuilding") {
       setDragStart(null);
       setDragEnd(null);
       return;
@@ -105,7 +115,11 @@ export function MapCanvas({ sim }: Props) {
     const y = Math.min(dragStart.y, dragEnd.y);
     const width = Math.abs(dragStart.x - dragEnd.x) + 1;
     const height = Math.abs(dragStart.y - dragEnd.y) + 1;
-    await sim.updateObstacle(sim.toolMode === "addObstacle" ? "add_obstacle" : "remove_obstacle", x, y, width, height);
+    if (sim.toolMode === "modelBuilding") {
+      await sim.requestBuildingModel(x, y, width, height);
+    } else {
+      await sim.updateObstacle(sim.toolMode === "addObstacle" ? "add_obstacle" : "remove_obstacle", x, y, width, height);
+    }
     setDragStart(null);
     setDragEnd(null);
   };
@@ -123,6 +137,7 @@ export function MapCanvas({ sim }: Props) {
         <div className="map-actions">
           <button onClick={() => setViewport({ scale: 1, offsetX: 0, offsetY: 0 })}>Center view</button>
           {sim.toolMode === "addUav" && <span className="map-hint">Click map to place UAV</span>}
+          {sim.toolMode === "modelBuilding" && <span className="map-hint">Drag rectangle for building footprint</span>}
           <span className="mode-chip">{toolModeLabel(sim.toolMode)}</span>
         </div>
       </div>
@@ -152,7 +167,7 @@ export function MapCanvas({ sim }: Props) {
             pointerRef.current = { ...active, startClient: next };
           } else if (active.mode === "dragUav" && point && active.uavId) {
             sim.moveDraftUavTo(active.uavId, point);
-          } else if (active.mode === "selectObstacle" && point) {
+          } else if (active.mode === "selectRectangle" && point) {
             setDragEnd(point);
           }
         }}
@@ -169,10 +184,10 @@ export function MapCanvas({ sim }: Props) {
             sim.injectTarget(point.x, point.y);
             return;
           }
-          if (sim.toolMode === "addObstacle" || sim.toolMode === "removeObstacle") {
+          if (sim.toolMode === "addObstacle" || sim.toolMode === "removeObstacle" || sim.toolMode === "modelBuilding") {
             setDragStart(point);
             setDragEnd(point);
-            pointerRef.current = { mode: "selectObstacle", startClient: clientPoint(event) };
+            pointerRef.current = { mode: "selectRectangle", startClient: clientPoint(event) };
             event.currentTarget.setPointerCapture(event.pointerId);
             return;
           }
@@ -189,8 +204,8 @@ export function MapCanvas({ sim }: Props) {
         onPointerUp={(event) => {
           const active = pointerRef.current;
           pointerRef.current = null;
-          if (active?.mode === "selectObstacle") {
-            finishObstacleDrag();
+          if (active?.mode === "selectRectangle") {
+            finishRectangleDrag();
           }
           try {
             event.currentTarget.releasePointerCapture(event.pointerId);
@@ -200,8 +215,8 @@ export function MapCanvas({ sim }: Props) {
         }}
         onPointerLeave={() => {
           setHover(null);
-          if (pointerRef.current?.mode === "selectObstacle") {
-            finishObstacleDrag();
+          if (pointerRef.current?.mode === "selectRectangle") {
+            finishRectangleDrag();
           }
           pointerRef.current = null;
         }}
@@ -215,6 +230,7 @@ export function MapCanvas({ sim }: Props) {
         <span><i className="legend priority" /> priority</span>
         <span><i className="legend coverage" /> coverage heat</span>
         <span><i className="legend planned" /> planned path</span>
+        <span><i className="legend modeling" /> building modeling</span>
         <span><i className="legend draft" /> draft UAV</span>
         <span><i className="legend searching" /> live UAV</span>
       </div>
@@ -372,6 +388,39 @@ function drawDraftUavs(
   });
 }
 
+function drawModelingTasks(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  map: SimulationMap,
+  viewport: Viewport,
+  tasks: ModelingTaskView[],
+) {
+  tasks.forEach((task) => {
+    if (task.footprint.length >= 4) {
+      const xs = task.footprint.map((point) => point.x);
+      const ys = task.footprint.map((point) => point.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const maxX = Math.max(...xs);
+      const maxY = Math.max(...ys);
+      const startRect = cellRect(map, width, height, viewport, minX, minY);
+      const endRect = cellRect(map, width, height, viewport, maxX, maxY);
+      ctx.fillStyle = "rgba(245, 158, 11, 0.2)";
+      ctx.strokeStyle = task.status === "COMPLETED" ? "#198754" : "#b7791f";
+      ctx.lineWidth = 2;
+      ctx.fillRect(startRect.x, startRect.y, endRect.x + endRect.w - startRect.x, endRect.y + endRect.h - startRect.y);
+      ctx.strokeRect(startRect.x, startRect.y, endRect.x + endRect.w - startRect.x, endRect.y + endRect.h - startRect.y);
+    }
+    if (task.logicalWaypoints.length >= 2) {
+      ctx.strokeStyle = task.status === "COMPLETED" ? "rgba(25, 135, 84, 0.72)" : "rgba(183, 121, 31, 0.82)";
+      ctx.lineWidth = 2.8;
+      ctx.setLineDash([]);
+      drawPolyline(ctx, width, height, map, viewport, task.logicalWaypoints);
+    }
+  });
+}
+
 function drawSelection(ctx: CanvasRenderingContext2D, width: number, height: number, map: SimulationMap, viewport: Viewport, start: GridPosition, end: GridPosition) {
   const startRect = cellRect(map, width, height, viewport, Math.min(start.x, end.x), Math.min(start.y, end.y));
   const endRect = cellRect(map, width, height, viewport, Math.max(start.x, end.x), Math.max(start.y, end.y));
@@ -487,6 +536,7 @@ function statusColor(status: string, index: number): string {
   if (status === "OFFLINE") return "#6f7780";
   if (status === "RETURNING") return "#b9562c";
   if (status === "CONFIRMING") return "#7b2cbf";
+  if (status === "MODELING") return "#b7791f";
   if (status === "SEARCHING") return colorFor(index);
   return "#198754";
 }
@@ -508,7 +558,50 @@ function toolModeLabel(mode: UseSimulationResult["toolMode"]): string {
       return "Remove obstacle";
     case "target":
       return "Inject target";
+    case "modelBuilding":
+      return "Model building";
     default:
       return "Inspect";
   }
+}
+
+function modelingTasksFromState(tasks: unknown): ModelingTaskView[] {
+  if (!tasks || typeof tasks !== "object" || Array.isArray(tasks)) {
+    return [];
+  }
+  const raw = (tasks as Record<string, unknown>).modeling_tasks;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      return {
+        taskId: String(record.task_id || ""),
+        status: String(record.status || ""),
+        footprint: positionsFromUnknown(record.footprint),
+        logicalWaypoints: positionsFromUnknown(record.logical_waypoints),
+      };
+    })
+    .filter((item): item is ModelingTaskView => Boolean(item?.taskId));
+}
+
+function positionsFromUnknown(value: unknown): GridPosition[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const point = item as Record<string, unknown>;
+      const x = Number(point.x);
+      const y = Number(point.y);
+      return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
+    })
+    .filter((point): point is GridPosition => Boolean(point));
 }

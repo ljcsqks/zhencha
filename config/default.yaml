@@ -102,6 +102,19 @@ search:
   redundant_penalty_weight: 0.5
   redundant_revisit_interval_s: 30.0
 
+modeling:
+  enabled: true
+  default_uav_count: 2
+  max_uav_count: 4
+  default_standoff_cells: 3
+  min_standoff_cells: 1
+  max_standoff_cells: 8
+  default_laps: 1
+  sample_step_cells: 2
+  resume_search_after: true
+  allow_interrupt_search: true
+  min_battery_margin: 0.2
+
 auction:
   w_distance: 1.0
   w_battery: 0.3

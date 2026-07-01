@@ -12,13 +12,19 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
   const started = Boolean(state && (state.tick > 0 || state.running || state.global_coverage > 0 || commandLog.length > 0));
   const statusCounts = countUavStatus(state);
   const scheduler = nestedRecord(state?.diagnostics || {}, ["scheduler"]);
-  const segment = nestedRecord(state?.metrics?.diagnostics as Record<string, unknown> | undefined || {}, ["segment_quality"]);
+  const segment = nestedRecord((state?.metrics?.diagnostics as Record<string, unknown> | undefined) || {}, ["segment_quality"]);
   const rejectedCount = commandLog.filter((entry) => ["rejected", "failed"].includes(String(entry.ack_status || ""))).length;
   const noFlyViolations = numberMetric(state?.metrics?.no_fly_violations);
   const confirmRate = numberMetric(state?.metrics?.confirm_success_rate);
   const targetCount = Object.keys(state?.targets || {}).length + numberMetric(state?.metrics?.target_found_count);
   const assistCreated = numberMetric(scheduler.idle_assist_created_tasks);
   const assistAccepted = numberMetric(scheduler.idle_assist_accepted_tasks);
+  const modelingTotal = numberMetric(scheduler.modeling_jobs_total);
+  const modelingCompleted = numberMetric(scheduler.modeling_jobs_completed);
+  const modelingActive = numberMetric(scheduler.modeling_active_jobs);
+  const modelingAssigned = numberMetric(scheduler.modeling_assigned_uav_count);
+  const modelingProgress = numberMetric(scheduler.modeling_facade_progress_ratio);
+  const modelingResumed = numberMetric(scheduler.modeling_resumed_search_tasks);
   const clusteredLaunch = booleanMetric(segment.clustered_launch_detected);
   const launchProfile = stringMetric(segment.launch_profile);
   const dynamicRepairs = numberMetric(scheduler.dynamic_route_repair_success);
@@ -67,7 +73,7 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
         />
         <StatusRow label="Algorithm" value={state?.algorithm_version || "-"} mono />
         <StatusRow
-          label="协同展开模式"
+          label="Launch mode"
           value={formatLaunchProfile(launchProfile)}
           tone={launchProfile === "clustered_point_launch" || launchProfile === "common_edge_staging" ? "ok" : undefined}
         />
@@ -75,6 +81,15 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
         {(assistCreated > 0 || assistAccepted > 0) && (
           <StatusRow label="Idle assist" value={`${assistAccepted}/${assistCreated} accepted`} tone="ok" />
         )}
+        {modelingTotal > 0 && (
+          <StatusRow
+            label="Building modeling"
+            value={`${modelingCompleted}/${modelingTotal} complete, ${modelingActive} active`}
+            tone={modelingActive > 0 || modelingCompleted > 0 ? "ok" : undefined}
+          />
+        )}
+        {modelingTotal > 0 && <StatusRow label="Facade progress" value={`${modelingProgress.toFixed(0)}% / ${modelingAssigned} UAVs`} />}
+        {modelingResumed > 0 && <StatusRow label="Search resumed" value={`${modelingResumed} task(s)`} tone="ok" />}
         {dynamicRepairs > 0 && <StatusRow label="Dynamic replans" value={String(dynamicRepairs)} tone="ok" />}
       </dl>
     </section>
@@ -153,9 +168,9 @@ function stringMetric(value: unknown): string {
 }
 
 function formatLaunchProfile(profile: string): string {
-  if (profile === "clustered_point_launch") return "集结点";
-  if (profile === "common_edge_staging") return "同侧展开";
-  if (profile === "distributed_deployment") return "分散部署";
+  if (profile === "clustered_point_launch") return "Clustered point";
+  if (profile === "common_edge_staging") return "Common edge staging";
+  if (profile === "distributed_deployment") return "Distributed deployment";
   return "-";
 }
 

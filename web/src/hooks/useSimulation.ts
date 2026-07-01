@@ -18,7 +18,7 @@ import {
   type SimulationClientState,
 } from "./simulationState";
 
-export type ToolMode = "inspect" | "target" | "addUav" | "addObstacle" | "removeObstacle";
+export type ToolMode = "inspect" | "target" | "addUav" | "addObstacle" | "removeObstacle" | "modelBuilding";
 
 export interface SimulationActions {
   loadScenarios(): Promise<void>;
@@ -30,6 +30,7 @@ export interface SimulationActions {
   fetchMetrics(): Promise<void>;
   exportRun(): Promise<void>;
   injectTarget(x: number, y: number): Promise<void>;
+  requestBuildingModel(x: number, y: number, width: number, height: number): Promise<void>;
   updateObstacle(operation: "add_obstacle" | "remove_obstacle", x: number, y: number, width: number, height: number): Promise<void>;
   setUavOnlineState(uavId: string, online: boolean): Promise<void>;
   resetDraftFromState(): void;
@@ -54,6 +55,14 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   commandLog: CommandLogEntry[];
   toolMode: ToolMode;
   setToolMode(mode: ToolMode): void;
+  modelingUavCount: number;
+  setModelingUavCount(value: number): void;
+  modelingStandoffCells: number;
+  setModelingStandoffCells(value: number): void;
+  modelingLaps: number;
+  setModelingLaps(value: number): void;
+  modelingResumeSearch: boolean;
+  setModelingResumeSearch(value: boolean): void;
   showCoverage: boolean;
   setShowCoverage(value: boolean): void;
   showPlannedPath: boolean;
@@ -86,6 +95,10 @@ export function useSimulation(): UseSimulationResult {
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "reconnecting" | "offline">("offline");
   const [error, setError] = useState<string>();
   const [toolMode, setToolMode] = useState<ToolMode>("inspect");
+  const [modelingUavCount, setModelingUavCount] = useState(2);
+  const [modelingStandoffCells, setModelingStandoffCells] = useState(3);
+  const [modelingLaps, setModelingLaps] = useState(1);
+  const [modelingResumeSearch, setModelingResumeSearch] = useState(true);
   const [showCoverage, setShowCoverage] = useState(true);
   const [showPlannedPath, setShowPlannedPath] = useState(true);
   const [showHistoryPath, setShowHistoryPath] = useState(false);
@@ -289,6 +302,24 @@ export function useSimulation(): UseSimulationResult {
             dwell_s: 5,
           },
         }),
+      requestBuildingModel: (x, y, width, height) =>
+        postEventAndStep({
+          type: "BUILDING_MODEL_REQUEST",
+          source_uav_id: null,
+          data: {
+            building_id: `building_${Date.now()}`,
+            footprint: [
+              { x, y },
+              { x: x + width - 1, y },
+              { x: x + width - 1, y: y + height - 1 },
+              { x, y: y + height - 1 },
+            ],
+            uav_count: modelingUavCount,
+            standoff_cells: modelingStandoffCells,
+            laps: modelingLaps,
+            resume_search_after: modelingResumeSearch,
+          },
+        }),
       updateObstacle: (operation, x, y, width, height) =>
         postEventAndStep({
           type: "MAP_UPDATE",
@@ -341,6 +372,10 @@ export function useSimulation(): UseSimulationResult {
       selectedAlgorithmVersion,
       selectedScenario,
       missionDraft,
+      modelingLaps,
+      modelingResumeSearch,
+      modelingStandoffCells,
+      modelingUavCount,
     ],
   );
 
@@ -360,6 +395,14 @@ export function useSimulation(): UseSimulationResult {
     clearError: () => setError(undefined),
     toolMode,
     setToolMode,
+    modelingUavCount,
+    setModelingUavCount,
+    modelingStandoffCells,
+    setModelingStandoffCells,
+    modelingLaps,
+    setModelingLaps,
+    modelingResumeSearch,
+    setModelingResumeSearch,
     showCoverage,
     setShowCoverage,
     showPlannedPath,

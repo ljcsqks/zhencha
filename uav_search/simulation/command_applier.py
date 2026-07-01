@@ -98,6 +98,8 @@ class CommandApplier:
             return self._assign_path(command, status, now)
         if command.command == CommandType.FOLLOW_PATH:
             return self._assign_path(command, UAVStatus.SEARCHING, now)
+        if command.command == CommandType.MODEL_STRUCTURE:
+            return self._assign_path(command, UAVStatus.MODELING, now)
         if command.command == CommandType.CONFLICT_YIELD:
             if command.metadata.get("advisory") is True or command.metadata.get("effect") == "none":
                 return self._ack(command, AckStatus.ACCEPTED, now, "conflict_yield_advisory")

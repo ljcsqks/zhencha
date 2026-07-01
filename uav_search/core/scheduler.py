@@ -26,6 +26,7 @@ from uav_search.maps.grid_map import GridMap
 from uav_search.maps.map_updater import MapUpdater
 from uav_search.planning.conflict_resolver import detect_conflicts, resolve_conflicts
 from uav_search.planning.coverage_planner import create_coverage_planner
+from uav_search.planning.facade_modeling_planner import BuildingFootprint, FacadeModelingPlanner, ModelingPlan
 from uav_search.planning.path_planner import PathPlanner
 from uav_search.planning.reachability import ReachabilityIndex, build_reachability_index
 from uav_search.planning.reachability import connected_components as reachability_components
@@ -111,9 +112,13 @@ class Scheduler:
         self._confirmations: dict[str, dict[str, Any]] = {}  # 追踪目标确认任务状态
         self._confirmed_targets: set[str] = set()
         self._target_metrics: dict[str, dict[str, Any]] = {}
+        self._confirmed_targets: set[str] = set()
+        self._modeling_jobs: dict[str, dict[str, Any]] = {}
+        self._modeling_job_seq = 0
         self._issued_commands: dict[str, ControlCommand] = {}
         self._handled_command_ack_keys: set[tuple[str, str, float]] = set()
         self._ack_events_handled: list[str] = []
+        self._supplemental_task_seq = 0
         self._initialized = False  # 标记是否已生成初始任务
         self._supplemental_task_seq = 0
         self._diagnostics: dict[str, int] = {
@@ -136,6 +141,18 @@ class Scheduler:
             "dynamic_route_repair_dropped_waypoints": 0,
             "dynamic_route_repair_replanned_tasks": 0,
             "dynamic_route_repair_fallback_to_supplemental": 0,
+            "modeling_jobs_total": 0,
+            "modeling_jobs_completed": 0,
+            "modeling_jobs_failed": 0,
+            "modeling_active_jobs": 0,
+            "modeling_assigned_uav_count": 0,
+            "modeling_facade_lane_count": 0,
+            "modeling_facade_progress_ratio": 0,
+            "modeling_distance_m": 0,
+            "modeling_interrupted_search_tasks": 0,
+            "modeling_resumed_search_tasks": 0,
+            "modeling_unreachable_facade_lanes": 0,
+            "modeling_no_fly_violations": 0,
         }
         self._idle_reason_per_uav: dict[str, str] = {}
         self._idle_since_by_uav: dict[str, float] = {}
@@ -197,7 +214,31 @@ class Scheduler:
             for task in sorted(self.task_manager.tasks.values(), key=lambda item: item.id)
             if task.metadata.get("assist_task") is True
         ]
-        return {"status_counts": status_counts, "confirmations": confirmations, "assist_tasks": assist_tasks}
+        modeling_tasks = [
+            {
+                "task_id": task.id,
+                "status": task.status.value,
+                "building_id": task.metadata.get("building_id"),
+                "job_id": task.metadata.get("job_id"),
+                "uav_id": task.assigned_uav_id,
+                "facade_lane_ids": list(task.metadata.get("facade_lane_ids", []) or []),
+                "progress": task.progress,
+                "resume_search_after": bool(task.metadata.get("resume_search_after", True)),
+                "interrupted_task_id": task.metadata.get("interrupted_task_id"),
+                "footprint": task.metadata.get("footprint", []),
+                "logical_waypoints": task.metadata.get("logical_waypoints", []),
+            }
+            for task in sorted(self.task_manager.tasks.values(), key=lambda item: item.id)
+            if task.type == TaskType.MODELING
+        ]
+        modeling_jobs = [dict(job) for _, job in sorted(self._modeling_jobs.items())]
+        return {
+            "status_counts": status_counts,
+            "confirmations": confirmations,
+            "assist_tasks": assist_tasks,
+            "modeling_tasks": modeling_tasks,
+            "modeling_jobs": modeling_jobs,
+        }
 
     def diagnostics_snapshot(self) -> dict[str, Any]:
         return {**self._diagnostics, "idle_reason_per_uav": dict(self._idle_reason_per_uav)}
@@ -205,6 +246,9 @@ class Scheduler:
     def remember_control_commands(self, commands: list[ControlCommand]) -> None:
         for command in commands:
             self._issued_commands[command.command_id] = command
+
+    def record_issued_commands(self, commands: list[ControlCommand]) -> None:
+        self.remember_control_commands(commands)
 
     def handle_command_acks(self, command_acks: list[CommandAck]) -> list[DecisionCommand]:
         commands: list[DecisionCommand] = []
@@ -237,6 +281,10 @@ class Scheduler:
         if command.task_id is None or command.task_id not in self.task_manager.tasks:
             return
         task = self.task_manager.tasks[command.task_id]
+        if command.command == CommandType.MODEL_STRUCTURE and task.type == TaskType.MODELING:
+            if task.status == TaskStatus.ASSIGNED:
+                self.task_manager.start_task(task.id, now=ack.updated_at)
+            return
         if command.command in (CommandType.FOLLOW_PATH, CommandType.REPLAN) and task.type == TaskType.SEARCH:
             if task.status == TaskStatus.ASSIGNED:
                 self.task_manager.start_task(task.id, now=ack.updated_at)
@@ -244,6 +292,9 @@ class Scheduler:
     def _handle_command_not_executed(self, command: ControlCommand, ack: CommandAck) -> None:
         if command.command == CommandType.CONFIRM_TARGET:
             self._fail_confirmation_from_ack(command, ack)
+            return
+        if command.command == CommandType.MODEL_STRUCTURE:
+            self._fail_modeling_from_ack(command, ack)
             return
         if command.task_id is None or command.task_id not in self.task_manager.tasks:
             return
@@ -258,6 +309,8 @@ class Scheduler:
     def _handle_command_completed(self, command: ControlCommand, ack: CommandAck) -> list[DecisionCommand]:
         if command.command == CommandType.CONFIRM_TARGET:
             return self._complete_confirmation_from_ack(command, ack)
+        if command.command == CommandType.MODEL_STRUCTURE:
+            return self._complete_modeling_from_ack(command, ack)
         if command.command == CommandType.RETURN_HOME:
             return []
         if command.task_id is None or command.task_id not in self.task_manager.tasks:
@@ -266,6 +319,83 @@ class Scheduler:
         if task.type == TaskType.SEARCH and task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
             self.task_manager.complete_task(task.id, now=ack.updated_at)
         return []
+
+    def _complete_modeling_from_ack(self, command: ControlCommand, ack: CommandAck) -> list[DecisionCommand]:
+        if command.task_id is None or command.task_id not in self.task_manager.tasks:
+            return []
+        task = self.task_manager.tasks[command.task_id]
+        if task.type != TaskType.MODELING:
+            return []
+        if task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            self.task_manager.complete_task(task.id, now=ack.updated_at)
+
+        job_id = str(task.metadata.get("job_id", ""))
+        job = self._modeling_jobs.get(job_id)
+        if not job:
+            return []
+        completed = sum(
+            1
+            for task_id in job.get("task_ids", [])
+            if task_id in self.task_manager.tasks and self.task_manager.tasks[task_id].status == TaskStatus.COMPLETED
+        )
+        total = max(1, len(job.get("task_ids", [])))
+        self._diagnostics["modeling_facade_progress_ratio"] = int((completed / total) * 100)
+        if completed < total:
+            return []
+
+        if job.get("status") != "COMPLETED":
+            job["status"] = "COMPLETED"
+            job["completed_at"] = ack.updated_at
+            self._diagnostics["modeling_jobs_completed"] += 1
+            self._diagnostics["modeling_active_jobs"] = max(0, self._diagnostics["modeling_active_jobs"] - 1)
+            event_id = f"modeling_done_{job_id}"
+            self._ack_events_handled.append(event_id)
+
+        if not bool(job.get("resume_search_after", True)):
+            return [
+                DecisionCommand(
+                    uav_id=command.uav_id,
+                    command=CommandType.HOLD,
+                    task_id=command.task_id,
+                    target=ack and task.entry_point,
+                    path=[],
+                    reason="modeling_done",
+                )
+            ]
+
+        resume_commands: list[DecisionCommand] = []
+        interrupted_by_uav = job.get("interrupted_task_by_uav", {})
+        for uav_id, interrupted_task_id in interrupted_by_uav.items():
+            if interrupted_task_id is None:
+                continue
+            uav = self.fleet.get_uav(str(uav_id)).state
+            resume = self._resume_interrupted_search_after_confirm(
+                {"interrupted_task_id": interrupted_task_id, "target_id": job.get("building_id", job_id)},
+                uav,
+                ack.updated_at,
+            )
+            if resume is not None:
+                self._diagnostics["modeling_resumed_search_tasks"] += 1
+                resume_commands.append(resume)
+        return resume_commands
+
+    def _fail_modeling_from_ack(self, command: ControlCommand, ack: CommandAck) -> None:
+        if command.task_id is None or command.task_id not in self.task_manager.tasks:
+            return
+        task = self.task_manager.tasks[command.task_id]
+        if task.type != TaskType.MODELING:
+            return
+        if task.status in (TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS):
+            self.task_manager.mark_blocked(task.id, now=ack.updated_at)
+        job_id = str(task.metadata.get("job_id", ""))
+        job = self._modeling_jobs.get(job_id)
+        if job and job.get("status") != "FAILED":
+            job["status"] = "FAILED"
+            job["failed_at"] = ack.updated_at
+            job["failure_reason"] = ack.reason or ack.status.value
+            self._diagnostics["modeling_jobs_failed"] += 1
+            self._diagnostics["modeling_active_jobs"] = max(0, self._diagnostics["modeling_active_jobs"] - 1)
+            self._ack_events_handled.append(f"modeling_failed_{job_id}")
 
     def _complete_confirmation_from_ack(self, command: ControlCommand, ack: CommandAck) -> list[DecisionCommand]:
         task_id = command.task_id or ""
@@ -350,7 +480,7 @@ class Scheduler:
         reserved_uav_ids = {
             command.uav_id
             for command in commands
-            if command.command in (CommandType.CONFIRM_TARGET, CommandType.RETURN_HOME, CommandType.HOLD)
+            if command.command in (CommandType.CONFIRM_TARGET, CommandType.MODEL_STRUCTURE, CommandType.RETURN_HOME, CommandType.HOLD)
         }
         available_uavs = [
             state for state in self.fleet.get_available_uavs()
@@ -471,6 +601,8 @@ class Scheduler:
             return self._handle_map_update(event)
         if event.type == EventType.TARGET_FOUND:
             return self._handle_target_found(event)
+        if event.type == EventType.BUILDING_MODEL_REQUEST:
+            return self._handle_building_model_request(event)
         if event.type == EventType.CONFIRM_DONE:
             return self._handle_confirm_done(event)
         return []
@@ -712,6 +844,8 @@ class Scheduler:
                 status = UAVStatus.SEARCHING
             elif command.command == CommandType.CONFIRM_TARGET:
                 status = UAVStatus.CONFIRMING
+            elif command.command == CommandType.MODEL_STRUCTURE:
+                status = UAVStatus.MODELING
             elif command.command == CommandType.RETURN_HOME:
                 status = UAVStatus.RETURNING
             elif command.command == CommandType.REPLAN:
@@ -1870,6 +2004,164 @@ class Scheduler:
             reachability=self._reachability,
             allowed_uav_ids=allowed_uav_ids,
         )
+
+    def _handle_building_model_request(self, event: Event) -> list[DecisionCommand]:
+        modeling_config = self.config.get("modeling", {})
+        if not bool(modeling_config.get("enabled", True)):
+            self._diagnostics["modeling_jobs_failed"] += 1
+            return []
+
+        footprint = self._building_footprint_from_event(event)
+        if footprint is None:
+            self._diagnostics["modeling_jobs_failed"] += 1
+            return []
+
+        max_uavs = max(1, int(modeling_config.get("max_uav_count", 4)))
+        requested = int(event.data.get("uav_count", modeling_config.get("default_uav_count", 2)))
+        uav_count = max(1, min(requested, max_uavs))
+        standoff = int(event.data.get("standoff_cells", modeling_config.get("default_standoff_cells", 3)))
+        standoff = max(int(modeling_config.get("min_standoff_cells", 1)), standoff)
+        standoff = min(int(modeling_config.get("max_standoff_cells", standoff)), standoff)
+        laps = max(1, int(event.data.get("laps", modeling_config.get("default_laps", 1))))
+        resume_search_after = bool(event.data.get("resume_search_after", modeling_config.get("resume_search_after", True)))
+
+        selected_uavs = self._select_modeling_uavs(uav_count, modeling_config)
+        if not selected_uavs:
+            self._diagnostics["modeling_jobs_failed"] += 1
+            return []
+
+        planner = FacadeModelingPlanner(modeling_config)
+        plans = planner.plan_modeling(
+            footprint=footprint,
+            grid_map=self.grid_map,
+            uav_states=selected_uavs,
+            uav_count=len(selected_uavs),
+            standoff_cells=standoff,
+            laps=laps,
+            created_at=event.timestamp,
+            resume_search_after=resume_search_after,
+        )
+        self._merge_modeling_diagnostics(planner.last_diagnostics)
+        if not plans:
+            self._diagnostics["modeling_jobs_failed"] += 1
+            return []
+
+        self._modeling_job_seq += 1
+        job_id = f"modeling_{footprint.building_id}_{self._modeling_job_seq:03d}"
+        interrupted_by_uav: dict[str, str | None] = {}
+        tasks: list[Task] = []
+        commands: list[DecisionCommand] = []
+        for plan in plans:
+            uav = self.fleet.get_uav(plan.uav_id).state
+            interrupted_task_id = self._pause_search_for_modeling(uav, event.timestamp, modeling_config)
+            interrupted_by_uav[uav.id] = interrupted_task_id
+            if interrupted_task_id is not None:
+                self._diagnostics["modeling_interrupted_search_tasks"] += 1
+            task_id = f"{job_id}_{uav.id}"
+            metadata = {
+                **plan.metadata,
+                "job_id": job_id,
+                "event_id": event.id,
+                "footprint": event.data.get("footprint", []),
+                "interrupted_task_id": interrupted_task_id,
+                "resume_search_after": resume_search_after,
+                "modeling_task": True,
+            }
+            task = Task(
+                id=task_id,
+                type=TaskType.MODELING,
+                priority=10.0,
+                target_cells=set(plan.logical_waypoints),
+                entry_point=plan.logical_waypoints[0],
+                status=TaskStatus.ASSIGNED,
+                assigned_uav_id=uav.id,
+                waypoints=list(plan.route),
+                coverage_waypoints=list(plan.logical_waypoints),
+                estimated_cost_m=plan.estimated_distance_m,
+                created_at=event.timestamp,
+                updated_at=event.timestamp,
+                source_event_id=event.id,
+                allowed_uav_ids={uav.id},
+                metadata=metadata,
+            )
+            tasks.append(task)
+            commands.append(
+                DecisionCommand(
+                    uav_id=uav.id,
+                    command=CommandType.MODEL_STRUCTURE,
+                    task_id=task_id,
+                    target=plan.route[-1],
+                    path=list(plan.route),
+                    reason="building_model_request",
+                    command_id=f"cmd_{task_id}",
+                    metadata=metadata,
+                )
+            )
+
+        self.task_manager.add_tasks(tasks)
+        self._modeling_jobs[job_id] = {
+            "job_id": job_id,
+            "building_id": footprint.building_id,
+            "task_ids": [task.id for task in tasks],
+            "uav_ids": [str(task.assigned_uav_id) for task in tasks],
+            "resume_search_after": resume_search_after,
+            "interrupted_task_by_uav": interrupted_by_uav,
+            "status": "ACTIVE",
+            "created_at": event.timestamp,
+            "completed_at": None,
+        }
+        self._diagnostics["modeling_jobs_total"] += 1
+        self._diagnostics["modeling_active_jobs"] += 1
+        self._diagnostics["modeling_assigned_uav_count"] += len(tasks)
+        self._diagnostics["modeling_facade_progress_ratio"] = 0
+        return commands
+
+    def _building_footprint_from_event(self, event: Event) -> BuildingFootprint | None:
+        vertices_data = event.data.get("footprint")
+        building_id = str(event.data.get("building_id", event.id))
+        if not isinstance(vertices_data, list) or len(vertices_data) < 4:
+            return None
+        vertices: list[Position] = []
+        for item in vertices_data:
+            if isinstance(item, Position):
+                vertices.append(item)
+            elif isinstance(item, dict) and "x" in item and "y" in item:
+                vertices.append(Position(int(item["x"]), int(item["y"])))
+        if len(vertices) < 4:
+            return None
+        return BuildingFootprint(building_id=building_id, vertices=vertices)
+
+    def _select_modeling_uavs(self, uav_count: int, modeling_config: dict[str, Any]) -> list[UAVState]:
+        allow_interrupt = bool(modeling_config.get("allow_interrupt_search", True))
+        min_battery = float(modeling_config.get("min_battery_margin", 0.2))
+        candidates: list[UAVState] = []
+        for state in self.fleet.get_all_states():
+            if state.status in (UAVStatus.OFFLINE, UAVStatus.RETURNING, UAVStatus.CONFIRMING):
+                continue
+            if state.status == UAVStatus.IDLE or (allow_interrupt and state.status == UAVStatus.SEARCHING):
+                if state.battery >= min_battery:
+                    candidates.append(state)
+        return sorted(candidates, key=lambda state: (state.status != UAVStatus.IDLE, state.assigned_task_count, state.id))[:uav_count]
+
+    def _pause_search_for_modeling(
+        self,
+        uav: UAVState,
+        now: float,
+        modeling_config: dict[str, Any],
+    ) -> str | None:
+        if not bool(modeling_config.get("allow_interrupt_search", True)):
+            return None
+        return self._pause_search_for_confirmation(uav, now)
+
+    def _merge_modeling_diagnostics(self, diagnostics: dict[str, Any]) -> None:
+        for key in (
+            "modeling_facade_lane_count",
+            "modeling_unreachable_facade_lanes",
+            "modeling_no_fly_violations",
+        ):
+            if key in diagnostics:
+                self._diagnostics[key] += int(diagnostics[key])
+        self._diagnostics["modeling_distance_m"] += int(diagnostics.get("modeling_distance_m", 0))
 
     def _handle_target_found(self, event: Event) -> list[DecisionCommand]:
         target_data = event.data

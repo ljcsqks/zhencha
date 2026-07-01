@@ -1,5 +1,5 @@
 ﻿from uav_search.core.config import load_config
-from uav_search.core.contracts import ControlCommand
+from uav_search.core.contracts import AckStatus, CommandAck, ControlCommand
 from uav_search.core.data_types import (
     CellType,
     CommandType,
@@ -235,6 +235,126 @@ def test_target_found_interrupts_only_one_searching_uav() -> None:
     statuses = [state.status for state in fleet.get_all_states()]
     assert statuses.count(UAVStatus.CONFIRMING) == 1
     assert statuses.count(UAVStatus.SEARCHING) >= 1
+
+
+def test_building_model_request_creates_modeling_tasks_and_commands() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_3uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+
+    scheduler.event_manager.emit(
+        Event(
+            id="building_model_001",
+            type=EventType.BUILDING_MODEL_REQUEST,
+            timestamp=0.0,
+            priority=EventPriority.CRITICAL,
+            data={
+                "building_id": "building_a",
+                "footprint": [{"x": 30, "y": 10}, {"x": 38, "y": 10}, {"x": 38, "y": 18}, {"x": 30, "y": 18}],
+                "uav_count": 2,
+                "standoff_cells": 3,
+                "laps": 1,
+                "resume_search_after": True,
+            },
+        )
+    )
+
+    output = scheduler.regular_cycle(now=0.0)
+
+    assert "building_model_001" in output.events_handled
+    modeling_commands = [command for command in output.commands if command.command == CommandType.MODEL_STRUCTURE]
+    assert len(modeling_commands) == 2
+    assert all(scheduler.task_manager.tasks[command.task_id or ""].type == TaskType.MODELING for command in modeling_commands)
+    assert all(command.metadata["building_id"] == "building_a" for command in modeling_commands)
+    assert scheduler.diagnostics_snapshot()["modeling_jobs_total"] == 1
+    assert scheduler.diagnostics_snapshot()["modeling_assigned_uav_count"] == 2
+
+
+def test_model_structure_command_sets_uav_modeling_status() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    command = ControlCommand(
+        command_id="model_cmd_001",
+        command=CommandType.MODEL_STRUCTURE,
+        uav_id="uav_01",
+        task_id="model_task_001",
+        target=Position(2, 2),
+        path=[Position(0, 0), Position(1, 1), Position(2, 2)],
+        issued_at=0.0,
+        reason="building_model_request",
+    )
+
+    ack = CommandApplier(fleet, grid_map).apply([command], now=0.0)[0]
+
+    assert ack.status.value == "accepted"
+    assert fleet.get_uav("uav_01").state.status == UAVStatus.MODELING
+
+
+def test_modeling_completion_resumes_interrupted_search_task() -> None:
+    config = load_config("config/default.yaml", "config/scenarios/area_search_1uav.yaml")
+    grid_map = build_grid_map(config)
+    fleet = FleetManager.from_config(config, config["scenario"])
+    scheduler = Scheduler(grid_map, fleet, config)
+    search_task = Task(
+        id="search_task",
+        type=TaskType.SEARCH,
+        priority=1.0,
+        target_cells={Position(5, 0), Position(6, 0)},
+        entry_point=Position(5, 0),
+        waypoints=[Position(5, 0), Position(6, 0)],
+        coverage_waypoints=[Position(5, 0), Position(6, 0)],
+        status=TaskStatus.IN_PROGRESS,
+        assigned_uav_id="uav_01",
+        created_at=0.0,
+        updated_at=0.0,
+    )
+    scheduler.task_manager.add_tasks([search_task])
+    uav = fleet.get_uav("uav_01").state
+    uav.status = UAVStatus.SEARCHING
+    uav.current_task_id = "search_task"
+    uav.path = [Position(0, 0), Position(5, 0), Position(6, 0)]
+    uav.path_index = 0
+
+    scheduler.event_manager.emit(
+        Event(
+            id="building_model_resume",
+            type=EventType.BUILDING_MODEL_REQUEST,
+            timestamp=1.0,
+            priority=EventPriority.CRITICAL,
+            data={
+                "building_id": "building_a",
+                "footprint": [{"x": 30, "y": 10}, {"x": 38, "y": 10}, {"x": 38, "y": 18}, {"x": 30, "y": 18}],
+                "uav_count": 1,
+                "standoff_cells": 3,
+                "laps": 1,
+                "resume_search_after": True,
+            },
+        )
+    )
+    output = scheduler.regular_cycle(now=1.0)
+    model_command = next(command for command in output.commands if command.command == CommandType.MODEL_STRUCTURE)
+    scheduler.record_issued_commands([ControlCommand.from_decision(model_command, issued_at=1.0)])
+
+    resume_commands = scheduler.handle_command_acks(
+        [
+            CommandAck(
+                command_id=model_command.command_id or "",
+                uav_id=model_command.uav_id,
+                status=AckStatus.COMPLETED,
+                issued_at=1.0,
+                updated_at=20.0,
+                reason="path_completed",
+                progress=1.0,
+            )
+        ]
+    )
+
+    assert scheduler.task_manager.tasks[model_command.task_id or ""].status == TaskStatus.COMPLETED
+    assert scheduler.diagnostics_snapshot()["modeling_jobs_completed"] == 1
+    assert any(command.command == CommandType.FOLLOW_PATH and command.reason == "resume_interrupted_search" for command in resume_commands)
+    assert scheduler.diagnostics_snapshot()["modeling_resumed_search_tasks"] == 1
 
 
 def test_confirmation_done_resumes_interrupted_search_task() -> None:

@@ -368,6 +368,42 @@ dd {
   background: #e1f2fb;
 }
 
+.tool-options {
+  margin-top: 10px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid #d9e0e6;
+  border-radius: 7px;
+  background: #f7fafb;
+}
+
+.tool-options label {
+  display: grid;
+  gap: 4px;
+  color: #4d5964;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.tool-options input {
+  min-height: 30px;
+  padding: 5px 7px;
+}
+
+.tool-options .tool-option-inline {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-options .tool-option-inline input {
+  width: auto;
+  min-height: auto;
+}
+
 .toggle-list {
   margin-top: 12px;
   display: grid;
@@ -476,6 +512,7 @@ dd {
 .legend.coverage { background: rgba(55, 132, 206, 0.62); }
 .legend.changed { background: rgba(255, 57, 57, 0.72); }
 .legend.planned { background: repeating-linear-gradient(90deg, #1b6f9b 0 4px, transparent 4px 8px); }
+.legend.modeling { background: #b7791f; }
 .legend.draft { background: #ffffff; border-color: #1b6f9b; }
 .legend.searching { background: #00a6ff; }
 .legend.confirming { background: #b84cff; }

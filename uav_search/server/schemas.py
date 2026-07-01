@@ -68,7 +68,7 @@ class StartRequest(BaseModel):
 
 
 class EventRequest(BaseModel):
-    type: Literal["TARGET_FOUND", "MAP_UPDATE", "UAV_OFFLINE", "UAV_RECOVERED"]
+    type: Literal["TARGET_FOUND", "MAP_UPDATE", "UAV_OFFLINE", "UAV_RECOVERED", "BUILDING_MODEL_REQUEST"]
     time_s: float | None = None
     source_uav_id: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)
@@ -84,4 +84,12 @@ class EventRequest(BaseModel):
                 raise ValueError(f"TARGET_FOUND missing fields: {sorted(missing)}")
         if event_type == "MAP_UPDATE" and "operation" not in value:
             raise ValueError("MAP_UPDATE requires operation")
+        if event_type == "BUILDING_MODEL_REQUEST":
+            required = {"building_id", "footprint"}
+            missing = required.difference(value)
+            if missing:
+                raise ValueError(f"BUILDING_MODEL_REQUEST missing fields: {sorted(missing)}")
+            footprint = value.get("footprint")
+            if not isinstance(footprint, list) or len(footprint) < 4:
+                raise ValueError("BUILDING_MODEL_REQUEST footprint must contain at least four points")
         return value

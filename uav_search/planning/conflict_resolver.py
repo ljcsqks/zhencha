@@ -10,6 +10,7 @@ from uav_search.core.data_types import CommandType
 STATUS_PRIORITY = {
     UAVStatus.CONFIRMING: 5,
     UAVStatus.RETURNING: 4,
+    UAVStatus.MODELING: 4,
     UAVStatus.SEARCHING: 3,
     UAVStatus.AVOIDING: 2,
     UAVStatus.IDLE: 1,
