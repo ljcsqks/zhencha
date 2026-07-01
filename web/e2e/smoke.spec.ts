@@ -178,8 +178,8 @@ test("operator can request building modeling from a dragged footprint", async ({
   await page.getByRole("button", { name: "Model Building" }).click();
   await expect(page.getByText("Drag rectangle for building footprint")).toBeVisible();
   await page.getByLabel("UAVs").fill("2");
-  await page.getByLabel("Standoff").fill("3");
-  await page.getByLabel("Laps").fill("1");
+  await page.getByLabel("与建筑保持距离").fill("3");
+  await page.getByLabel("绕飞圈数").fill("1");
 
   await canvas.dragTo(canvas, {
     sourcePosition: { x: box.width * 0.6, y: box.height * 0.2 },

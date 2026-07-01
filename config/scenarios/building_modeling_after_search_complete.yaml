@@ -1,0 +1,38 @@
+name: "building_modeling_after_search_complete"
+description: "Building modeling request after search completion; UAV should return home after modeling."
+
+overrides:
+  map:
+    width_m: 120
+    height_m: 120
+    resolution_m: 10
+  uav:
+    count: 1
+    sensor_radius_cells: 4
+  simulation:
+    max_steps: 180
+
+uavs:
+  - id: "uav_01"
+    home_position: [0, 0]
+    initial_position: [0, 0]
+    sensor_radius_cells: 4
+    battery: 1.0
+
+events:
+  - id: "building_modeling_after_search_complete_request"
+    time_s: 45
+    type: "BUILDING_MODEL_REQUEST"
+    priority: "CRITICAL"
+    data:
+      building_id: "building_after_search"
+      footprint:
+        - {x: 5, y: 5}
+        - {x: 7, y: 5}
+        - {x: 7, y: 7}
+        - {x: 5, y: 7}
+      uav_count: 1
+      standoff_cells: 2
+      laps: 1
+      resume_search_after: true
+      post_modeling_behavior: "return_home_when_no_resume"

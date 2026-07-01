@@ -153,6 +153,11 @@ class Scheduler:
             "modeling_resumed_search_tasks": 0,
             "modeling_unreachable_facade_lanes": 0,
             "modeling_no_fly_violations": 0,
+            "modeling_return_home_commands": 0,
+            "modeling_hold_after_done_count": 0,
+            "modeling_no_resume_return_home_count": 0,
+            "modeling_completed_without_interrupted_search_count": 0,
+            "modeling_uav_stuck_modeling_count": 0,
         }
         self._idle_reason_per_uav: dict[str, str] = {}
         self._idle_since_by_uav: dict[str, float] = {}
@@ -333,6 +338,7 @@ class Scheduler:
         job = self._modeling_jobs.get(job_id)
         if not job:
             return []
+        commands = self._post_modeling_commands_for_uav(command, ack, task, job)
         completed = sum(
             1
             for task_id in job.get("task_ids", [])
@@ -340,44 +346,92 @@ class Scheduler:
         )
         total = max(1, len(job.get("task_ids", [])))
         self._diagnostics["modeling_facade_progress_ratio"] = int((completed / total) * 100)
-        if completed < total:
-            return []
-
-        if job.get("status") != "COMPLETED":
+        if completed >= total and job.get("status") != "COMPLETED":
             job["status"] = "COMPLETED"
             job["completed_at"] = ack.updated_at
             self._diagnostics["modeling_jobs_completed"] += 1
             self._diagnostics["modeling_active_jobs"] = max(0, self._diagnostics["modeling_active_jobs"] - 1)
             event_id = f"modeling_done_{job_id}"
             self._ack_events_handled.append(event_id)
+        return commands
 
-        if not bool(job.get("resume_search_after", True)):
-            return [
-                DecisionCommand(
-                    uav_id=command.uav_id,
-                    command=CommandType.HOLD,
-                    task_id=command.task_id,
-                    target=ack and task.entry_point,
-                    path=[],
-                    reason="modeling_done",
-                )
-            ]
+    def _post_modeling_commands_for_uav(
+        self,
+        command: ControlCommand,
+        ack: CommandAck,
+        task: Task,
+        job: dict[str, Any],
+    ) -> list[DecisionCommand]:
+        uav = self.fleet.get_uav(command.uav_id).state
+        if uav.status == UAVStatus.MODELING:
+            self._diagnostics["modeling_uav_stuck_modeling_count"] += 1
 
-        resume_commands: list[DecisionCommand] = []
         interrupted_by_uav = job.get("interrupted_task_by_uav", {})
-        for uav_id, interrupted_task_id in interrupted_by_uav.items():
-            if interrupted_task_id is None:
-                continue
-            uav = self.fleet.get_uav(str(uav_id)).state
+        interrupted_task_id = interrupted_by_uav.get(command.uav_id) or task.metadata.get("interrupted_task_id")
+        resume_search_after = bool(task.metadata.get("resume_search_after", job.get("resume_search_after", True)))
+        if interrupted_task_id and resume_search_after:
             resume = self._resume_interrupted_search_after_confirm(
-                {"interrupted_task_id": interrupted_task_id, "target_id": job.get("building_id", job_id)},
+                {"interrupted_task_id": interrupted_task_id, "target_id": job.get("building_id", command.task_id or "")},
                 uav,
                 ack.updated_at,
             )
             if resume is not None:
                 self._diagnostics["modeling_resumed_search_tasks"] += 1
-                resume_commands.append(resume)
-        return resume_commands
+                return [resume]
+
+        self._diagnostics["modeling_completed_without_interrupted_search_count"] += 1
+        behavior = str(task.metadata.get("post_modeling_behavior") or self.config.get("modeling", {}).get("post_modeling_behavior", "return_home_when_no_resume"))
+        if behavior == "return_home":
+            return self._modeling_return_or_hold(command, uav, ack.updated_at, force_return=True)
+        if behavior == "hold":
+            return self._modeling_hold(command, uav, "modeling_done_wait_for_search_assignment")
+        if (
+            behavior == "return_home_when_no_resume"
+            and bool(self.config.get("modeling", {}).get("return_home_after_completed_search", True))
+            and self._mission_goal_met()
+        ):
+            self._diagnostics["modeling_no_resume_return_home_count"] += 1
+            return self._modeling_return_or_hold(command, uav, ack.updated_at, force_return=False)
+        return self._modeling_hold(command, uav, "modeling_done_wait_for_search_assignment")
+
+    def _modeling_return_or_hold(
+        self,
+        command: ControlCommand,
+        uav: UAVState,
+        now: float,
+        force_return: bool,
+    ) -> list[DecisionCommand]:
+        if uav.position == uav.home_position and bool(self.config.get("modeling", {}).get("hold_if_already_home", True)):
+            return self._modeling_hold(command, uav, "modeling_done_at_home")
+        if not force_return and not self._mission_goal_met():
+            return self._modeling_hold(command, uav, "modeling_done_wait_for_search_assignment")
+        plan = self.planner.plan_path(uav, uav.home_position, self.grid_map, task_id=command.task_id)
+        if not plan.valid:
+            return self._modeling_hold(command, uav, "modeling_done_return_path_not_found")
+        self._diagnostics["modeling_return_home_commands"] += 1
+        return [
+            DecisionCommand(
+                uav_id=uav.id,
+                command=CommandType.RETURN_HOME,
+                task_id=command.task_id,
+                target=uav.home_position,
+                path=plan.path,
+                reason="modeling_done_return_home",
+            )
+        ]
+
+    def _modeling_hold(self, command: ControlCommand, uav: UAVState, reason: str) -> list[DecisionCommand]:
+        self._diagnostics["modeling_hold_after_done_count"] += 1
+        return [
+            DecisionCommand(
+                uav_id=uav.id,
+                command=CommandType.HOLD,
+                task_id=command.task_id,
+                target=uav.position,
+                path=[],
+                reason=reason,
+            )
+        ]
 
     def _fail_modeling_from_ack(self, command: ControlCommand, ack: CommandAck) -> None:
         if command.task_id is None or command.task_id not in self.task_manager.tasks:
@@ -2024,6 +2078,7 @@ class Scheduler:
         standoff = min(int(modeling_config.get("max_standoff_cells", standoff)), standoff)
         laps = max(1, int(event.data.get("laps", modeling_config.get("default_laps", 1))))
         resume_search_after = bool(event.data.get("resume_search_after", modeling_config.get("resume_search_after", True)))
+        post_modeling_behavior = str(event.data.get("post_modeling_behavior", modeling_config.get("post_modeling_behavior", "return_home_when_no_resume")))
 
         selected_uavs = self._select_modeling_uavs(uav_count, modeling_config)
         if not selected_uavs:
@@ -2065,6 +2120,7 @@ class Scheduler:
                 "footprint": event.data.get("footprint", []),
                 "interrupted_task_id": interrupted_task_id,
                 "resume_search_after": resume_search_after,
+                "post_modeling_behavior": post_modeling_behavior,
                 "modeling_task": True,
             }
             task = Task(
@@ -2105,6 +2161,7 @@ class Scheduler:
             "task_ids": [task.id for task in tasks],
             "uav_ids": [str(task.assigned_uav_id) for task in tasks],
             "resume_search_after": resume_search_after,
+            "post_modeling_behavior": post_modeling_behavior,
             "interrupted_task_by_uav": interrupted_by_uav,
             "status": "ACTIVE",
             "created_at": event.timestamp,

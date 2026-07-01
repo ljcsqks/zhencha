@@ -19,6 +19,7 @@ import {
 } from "./simulationState";
 
 export type ToolMode = "inspect" | "target" | "addUav" | "addObstacle" | "removeObstacle" | "modelBuilding";
+export type ModelingPostBehavior = "return_home_when_no_resume" | "hold" | "return_home";
 
 export interface SimulationActions {
   loadScenarios(): Promise<void>;
@@ -63,6 +64,8 @@ export interface UseSimulationResult extends SimulationClientState, SimulationAc
   setModelingLaps(value: number): void;
   modelingResumeSearch: boolean;
   setModelingResumeSearch(value: boolean): void;
+  modelingPostBehavior: ModelingPostBehavior;
+  setModelingPostBehavior(value: ModelingPostBehavior): void;
   showCoverage: boolean;
   setShowCoverage(value: boolean): void;
   showPlannedPath: boolean;
@@ -99,6 +102,7 @@ export function useSimulation(): UseSimulationResult {
   const [modelingStandoffCells, setModelingStandoffCells] = useState(3);
   const [modelingLaps, setModelingLaps] = useState(1);
   const [modelingResumeSearch, setModelingResumeSearch] = useState(true);
+  const [modelingPostBehavior, setModelingPostBehavior] = useState<ModelingPostBehavior>("return_home_when_no_resume");
   const [showCoverage, setShowCoverage] = useState(true);
   const [showPlannedPath, setShowPlannedPath] = useState(true);
   const [showHistoryPath, setShowHistoryPath] = useState(false);
@@ -318,6 +322,7 @@ export function useSimulation(): UseSimulationResult {
             standoff_cells: modelingStandoffCells,
             laps: modelingLaps,
             resume_search_after: modelingResumeSearch,
+            post_modeling_behavior: modelingPostBehavior,
           },
         }),
       updateObstacle: (operation, x, y, width, height) =>
@@ -373,6 +378,7 @@ export function useSimulation(): UseSimulationResult {
       selectedScenario,
       missionDraft,
       modelingLaps,
+      modelingPostBehavior,
       modelingResumeSearch,
       modelingStandoffCells,
       modelingUavCount,
@@ -403,6 +409,8 @@ export function useSimulation(): UseSimulationResult {
     setModelingLaps,
     modelingResumeSearch,
     setModelingResumeSearch,
+    modelingPostBehavior,
+    setModelingPostBehavior,
     showCoverage,
     setShowCoverage,
     showPlannedPath,

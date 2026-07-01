@@ -51,7 +51,7 @@ class UAV:
     def _finish_completed_path(self) -> None:
         if self.state.path_index < len(self.state.path) - 1:
             return
-        if self.state.status == UAVStatus.SEARCHING:
+        if self.state.status in (UAVStatus.SEARCHING, UAVStatus.MODELING):
             self.state.status = UAVStatus.IDLE
             self.state.available = True
         elif self.state.status == UAVStatus.RETURNING:

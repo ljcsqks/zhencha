@@ -25,6 +25,7 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
   const modelingAssigned = numberMetric(scheduler.modeling_assigned_uav_count);
   const modelingProgress = numberMetric(scheduler.modeling_facade_progress_ratio);
   const modelingResumed = numberMetric(scheduler.modeling_resumed_search_tasks);
+  const modelingReturnHome = numberMetric(scheduler.modeling_return_home_commands);
   const clusteredLaunch = booleanMetric(segment.clustered_launch_detected);
   const launchProfile = stringMetric(segment.launch_profile);
   const dynamicRepairs = numberMetric(scheduler.dynamic_route_repair_success);
@@ -89,6 +90,7 @@ export function MissionStatusPanel({ state, commandLog }: Props) {
           />
         )}
         {modelingTotal > 0 && <StatusRow label="Facade progress" value={`${modelingProgress.toFixed(0)}% / ${modelingAssigned} UAVs`} />}
+        {modelingReturnHome > 0 && <StatusRow label="Post-model return" value={`${modelingReturnHome} command(s)`} tone="ok" />}
         {modelingResumed > 0 && <StatusRow label="Search resumed" value={`${modelingResumed} task(s)`} tone="ok" />}
         {dynamicRepairs > 0 && <StatusRow label="Dynamic replans" value={String(dynamicRepairs)} tone="ok" />}
       </dl>

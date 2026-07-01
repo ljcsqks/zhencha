@@ -1,16 +1,6 @@
-INFO:     Started server process [12372]
+INFO:     Started server process [40992]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:51574 - "WebSocket /ws/sim" [accepted]
-INFO:     connection open
-INFO:     connection closed
-INFO:     127.0.0.1:49539 - "WebSocket /ws/sim" [accepted]
-INFO:     connection open
-INFO:     connection closed
-INFO:     127.0.0.1:57611 - "WebSocket /ws/sim" [accepted]
-INFO:     connection open
-INFO:     connection closed
-INFO:     127.0.0.1:56991 - "WebSocket /ws/sim" [accepted]
-INFO:     connection open
-INFO:     connection closed
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.

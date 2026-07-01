@@ -538,6 +538,11 @@ def _scheduler_quality(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "modeling_resumed_search_tasks",
         "modeling_unreachable_facade_lanes",
         "modeling_no_fly_violations",
+        "modeling_return_home_commands",
+        "modeling_hold_after_done_count",
+        "modeling_no_resume_return_home_count",
+        "modeling_completed_without_interrupted_search_count",
+        "modeling_uav_stuck_modeling_count",
     }
     result = {key: 0 for key in keys}
     latest_idle_reasons: dict[str, str] = {}

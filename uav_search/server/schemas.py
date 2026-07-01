@@ -92,4 +92,7 @@ class EventRequest(BaseModel):
             footprint = value.get("footprint")
             if not isinstance(footprint, list) or len(footprint) < 4:
                 raise ValueError("BUILDING_MODEL_REQUEST footprint must contain at least four points")
+            behavior = value.get("post_modeling_behavior")
+            if behavior is not None and behavior not in {"return_home_when_no_resume", "hold", "return_home", "resume_or_idle"}:
+                raise ValueError("BUILDING_MODEL_REQUEST post_modeling_behavior is invalid")
         return value
